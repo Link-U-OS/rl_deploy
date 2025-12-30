@@ -1,8 +1,10 @@
-# 灵渠 OS 远征 A2 运动控制程序
+English | [中文](README.zh_CN.md)
 
-## 一、基本内容
+# Link U OS Raise A2 Motion Control Program
 
-本项目为灵渠 OS 远征 A2 运动控制程序，包含以下内容：
+## I. Basic Content
+
+This project is the Link U OS Raise A2 motion control program, which includes the following content:
 
 ```
 .
@@ -14,19 +16,19 @@
 └── README.md           # Documentation
 ```
 
-## 二、基本概念
+## II. Basic Concepts
 
-### 2.1 运控部署逻辑图
+### 2.1 Motion Control Deployment Logic Diagram
 
-运控部署逻辑图：
+Motion Control Deployment Logic Diagram:
 
 ![](images/diagram.png)
 
-Motion Control （运动控制模块）在真机会与 Hal Ethercat 进行通信，接收来自 Hal Ethercat 发来的关节状态和 IMU 数据，根据这些状态信息结合用户指令下发关节控制指令。仿真环境则完全模拟了 Hal Ethercat 和 Robot System 所组成的系统，可以认为 Mujoco Sim 在程序逻辑上完全等价于  Hal Ethercat 和 Robot System。
+The Motion Control (motion control module) communicates with Hal Ethercat in the real machine, receiving joint status and IMU data from Hal Ethercat. Based on this status information and user commands, it issues joint control instructions. The simulation environment fully simulates the system composed of Hal Ethercat and Robot System, and it can be considered that Mujoco Sim is logically equivalent to Hal Ethercat and Robot System.
 
-### 2.2 运控程序输入输出
+### 2.2 Input and Output of the Motion Control Program
 
-运动控制程序的输入输出为以下话题，对应消息类型列在话题名后
+The input and output of the motion control program are the following topics, with the corresponding message types listed after the topic names:
 
 ```text
 /hardware_node
@@ -39,9 +41,10 @@ Motion Control （运动控制模块）在真机会与 Hal Ethercat 进行通信
     /imu/data: sensor_msgs/msg/Imu
 ```
 
-其中各个消息类型的定义如下：
+The definitions of each message type are as follows:
 
 ```text
+
 # Command
 string name
 uint32 sequence
@@ -61,13 +64,12 @@ uint32 sequence
 float64 position
 float64 velocity
 float64 effort
-
-# JointState
+```# JointState
 std_msgs/Header header
 State[] joints
 ```
 
-其中腿部共包含 12 个电机，单侧 6 个电机，一条示例 `/body_drive/leg_joint_state` 消息如下：
+The legs contain a total of 12 motors, with 6 motors on each side. An example `/body_drive/leg_joint_state` message is as follows:
 
 ```yaml
 header:
@@ -138,7 +140,7 @@ joints:
   effort: -7.024233397410617e-07
 ```
 
-上肢共包含 14 个电机，单侧 7 个电机，一条示例 /body\_drive/arm\_joint\_state 消息如下：
+The upper limb contains a total of 14 motors, with 7 motors on each side. An example /body_drive/arm_joint_state message is as follows:
 
 ```yaml
 header:
@@ -219,73 +221,73 @@ joints:
   effort: 2356.2239000041304
 ```
 
-注意以上都是各个电机的状态，对于串联关节来说，即为关节角度，而对于并联关节来说，其等效的串联关节状态还需要进行额外计算。以下图的脚踝并联机构为例，要想得到 J1，J2 轴的角度，即脚掌的 pitch 和 roll，一般运控训练都会对等效串联关节进行训练，强化学习模型输入输出的为串联关节的状态和控制命令，还需进行一次串并联解算，解算代码可以参考 https://github.com/HuNingHe/closed\_loop\_ankle（已被集成到部署框架内部）。
+Note that the above are the states of each motor. For serial joints, these represent the joint angles, while for parallel joints, the equivalent serial joint states need additional calculations. Taking the ankle parallel mechanism in the following figure as an example, to obtain the angles of the J1 and J2 axes, i.e., the pitch and roll of the foot, general motion control training is usually performed on the equivalent serial joints. The reinforcement learning model inputs and outputs the states and control commands of the serial joints, and an additional serial-parallel conversion is required. The conversion code can be referenced at https://github.com/HuNingHe/closed_loop_ankle (already integrated into the deployment framework).
 
 ![](images/image.png)
 
-## 2.3 运控部署框架逻辑解析
+## 2.3 Motion Control Deployment Framework Logic Analysis
 
-Motion Control 部署框架内部逻辑图：
+Motion Control deployment framework internal logic diagram:
 
-![](images/diagram-1.png)
+![](images/diagram-15.png)
 
-运控部署框架分为三个主要节点，分别为
+The Motion Control deployment framework is divided into three main nodes, which are:
 
-1. legged\_system 负责与 hal 进行通信，内部会进行脚踝机构串并联解算
+1. `legged_system` is responsible for communicating with the hal, and it performs serial-parallel calculations for the ankle mechanism internally.
 
-2. rl\_controller 接收串联关节状态并执行强化学习模型（onnx）的推理，输出串联关节指令
+2. `rl_controller` receives the state of the serial joints and executes the inference of the reinforcement learning model (onnx), outputting the commands for the serial joints.
 
-3. joy\_teleop 负责接收来自手柄的控制指令并发送对应 ROS2 话题
+3. `joy_teleop` is responsible for receiving control commands from the controller and sending corresponding ROS2 topics.
 
-详细逻辑请自行阅读上述逻辑图以及源代码。
+For detailed logic, please refer to the above logic diagram and the source code.
 
-# 三、仿真运行教程
+# III. Simulation Operation Tutorial
 
-## 3.1 环境要求
+## 3.1 Environment Requirements
 
-推荐使用 docker 方式运行仿真环境，如需本地运行仿真，请仿照 dockerfile/Dockerfile 中的内容自行安装对应依赖等。以下教程均基于 docker 方式运行。
+It is recommended to run the simulation environment using Docker. If you need to run the simulation locally, please install the corresponding dependencies according to the contents in dockerfile/Dockerfile. The following tutorial is based on running with Docker.
 
-1. 安装有 docker 的 x86 架构 linux 系统电脑
+1. An x86 architecture Linux system computer with Docker installed
 
-   1. docker 安装教程：https://docs.docker.com/engine/install/
+   1. Docker installation guide: https://docs.docker.com/engine/install/
 
-   2. 确保可以正常运行 `docker run hello-world`
+   2. Ensure that `docker run hello-world` can be executed successfully.
 
-2. 使用 x11 桌面系统
+2. Use an x11 desktop system
 
-   * 可以通过 `echo $XDG_SESSION_TYPE` 来检测，输出 x11 为期望现象
+   * You can check this by running `echo $XDG_SESSION_TYPE`, and the expected output should be `x11`.
 
-3. 系统性能不太低，可流畅运行 mujoco 仿真，无需 GPU 加速
+3. The system performance should not be too low, capable of running mujoco simulations smoothly without GPU acceleration.
 
-## 3.2 镜像构建
+## 3.2 Image Building
 
-在部署仓库目录下，运行如下指令：
+In the deployment repository directory, run the following command:
 
 ```bash
 docker build -t a2-deploy-image dockerfile/
 ```
 
-初次运行时间较长，请耐心等待镜像构建完成，其中已尽量将下载源替换为中国境内易访问源以加速下载，如遇某步骤下载缓慢甚至卡死请尝试切换网络环境后重试。
+The first run may take a long time, please wait patiently for the image build to complete. The download sources have been replaced with easily accessible sources within China to speed up the download. If a certain step is slow or stuck, try switching the network environment and retry.
 
-若 docker build 过程拉取基础镜像超时，需自行配置镜像源。
+If the `docker build` process times out while pulling the base image, you need to configure the image source yourself.
 
-成功后可执行以下命令检查镜像是否已经存在
+After success, you can execute the following command to check if the image already exists:
 
 ```bash
 docker images | grep a2-deploy-image
 ```
 
-## 3.3 镜像启动
+## 3.3 Image Startup
 
-首先在宿主机上运行以下命令，使得容器内可以运行 GUI 程序显示仿真窗口
+First, run the following command on the host machine to allow GUI programs to display the simulation window inside the container:
 
-> 允许docker访问显示器，用于配置 X Window System 的访问控制列表。执行 xhost + 会允许所有的主机连接到当前用户的 X 服务器，这样做会取消 X 服务器的访问控制，从而允许任何用户访问和操作 X 服务器。
+> Allow Docker to access the display, used to configure the access control list for the X Window System. Executing `xhost +` will allow all hosts to connect to the current user's X server, which disables the X server's access control, allowing any user to access and operate the X server.
 
 ```bash
 xhost +
 ```
 
-进入部署仓库目录后，可以通过如下命令启动镜像：
+After entering the deployment repository directory, you can start the image with the following command:
 
 ```bash
 docker run -it \
@@ -301,7 +303,7 @@ docker run -it \
   -d a2-deploy-image
 ```
 
-如果发现使用 NVIDIA 显卡的机器使用上述命令开启容器后仿真界面运行卡顿，可以尝试使用以下命令开启容器：
+If you find that the simulation interface runs slowly on a machine with an NVIDIA graphics card after starting the container with the above command, you can try starting the container with the following command:
 
 ```bash
 docker run -it \
@@ -320,118 +322,116 @@ docker run -it \
   -d a2-deploy-image
 ```
 
-## 3.4 启动仿真和运控以及虚拟摇杆
+## 3.4 Start Simulation, Motion Control, and Virtual Joystick
 
-### 3.4.1 编译并启动仿真
+### 3.4.1 Compile and Start Simulation
 
 ```bash
-# 进入容器环境
+# Enter the docker environment
 docker start a2_deploy && docker exec -it a2_deploy /bin/bash
 
-# 编译仿真环境
+# Build the simulation environment
 cd /home/agi/a2_deploy_workspace/mujoco_sim
 ./build.sh
 
-# 启动仿真
+# Launch the simulation
 cd /home/agi/a2_deploy_workspace/mujoco_sim_install/bin
 ./start_a2_t2d0_ultra.sh
 ```
 
-正确启动后应该可以看到如下界面：
+After starting correctly, you should see the following interface:
 
 ![](images/image-1.png)
 
-### 3.4.2 编译并启动运控框架
+### 3.4.2 Compile and Start Motion Control Framework
 
 ```bash
-# 进入容器环境
+# Enter the docker environment
 docker start a2_deploy && docker exec -it a2_deploy /bin/bash
 
-# 编译运控框架
+# Compile the motion control framework
 cd /home/agi/a2_deploy_workspace/deploy
 colcon build
 
-# 运行运控框架
+# Run the motion control framework
 bash install/deploy_assets/scripts/start_rl_control_sim.sh
 ```
 
-成功运行后的界面如下：
+The interface after successful execution is as follows:
 
 ![](images/image-2.png)
 
-### 3.4.3 运行虚拟摇杆
+### 3.4.3 Run Virtual Joystick
 
 ```bash
-# 进入容器环境
+# Enter the docker environment
 docker start a2_deploy && docker exec -it a2_deploy /bin/bash
 
-# 运行虚拟摇杆
+# Run the virtual joystick
 cd /home/agi/a2_deploy_workspace
 python3 install/deploy_assets/scripts/joy_interface.py
 ```
 
-摇杆启动后，界面如下：
+After starting the joystick, the interface is as follows:
 
 ![](images/image-3.png)
 
-## 3.5 遥控机器人行走
+## 3.5 Remote Control Robot Walking
 
-以上启动后依次点击虚拟摇杆界面 Start Control -> Mode Switch -> Enter Walk Mode，然后点击 mujoco 界面 Load Key 按钮，机器人即进入强化学习行走模式，调用 onnx 模型推理控制。
+After the above steps, click "Start Control" -> "Mode Switch" -> "Enter Walk Mode" sequentially on the virtual joystick interface, then click the "Load Key" button on the mujoco interface. The robot will enter the reinforcement learning walking mode, invoking the onnx model for inference control.
 
 ![](images/image-4.png)
 
-接下来要让机器人行走，只需点击 Deadman Button，然后用鼠标拖动虚拟摇杆或使用键盘控制。
+To make the robot walk, simply click the "Deadman Button" and then use the mouse to drag the virtual joystick or use the keyboard to control.
 
-# 四、实机部署教程
+# IV. Real Machine Deployment Tutorial
 
-本项目 deploy 目录编译打包后随灵渠 OS 整体 OTA 至远征 A2 机器人即可。
+This project's deploy directory can be compiled and packaged, and then OTA updated to the Raise A2 robot along with Link U OS.
 
-## 4.1 手柄操作流程
+## 4.1 Controller Operation Process
 
-请详细阅读以下内容，确保理解手柄操作逻辑后再上实机运行。手柄同样可用于仿真环境，建议在仿真环境熟悉手柄操作逻辑后再上实机运行。
+Please read the following content carefully to ensure you understand the controller operation logic before running on the real machine. The controller can also be used in the simulation environment, and it is recommended to familiarize yourself with the controller operation logic in the simulation environment before running on the real machine.
 
-<font color="red">操作前，请确保机器人急停手柄电量充足且可以随时被按下</font>
+<font color="red">Before operating, ensure that the emergency stop button on the controller has sufficient power and can be pressed at any time</font>
 
-1. 按下手柄“start”键机器人进入启动模式
-	- 机上的容器内终端，应显示“start control”字样
-  
+1. Press the "start" button on the controller to enter the startup mode
+   - The terminal inside the container on the robot should display "start control"
+   
 ![](./images/diagram-6.png)
 
-2. 同时按下手柄“LB”和“A”键机器人进入位控模式
-	- 机上的容器内终端，应显示“lie2stand”字样
-  
+2. Press the "LB" and "A" buttons simultaneously on the controller to enter the position control mode
+   - The terminal inside the container on the robot should display "lie2stand"
+   
 ![](./images/diagram-2.png)
 
-<font color="red">此时放下机器人，确保机器人双脚落地，搀扶机器人使其保持平衡，确保吊绳松弛</font>
+<font color="red">At this point, place the robot on the ground, ensuring both feet are on the ground, and support the robot to maintain balance, ensuring the suspension rope is slack</font>
 
-3. 按下手柄“X”键机器人进入运控模式
-	- 机上的容器内终端，应显示“stand2walk”字样
+3. Press the "X" button on the controller to enter the motion control mode
+   - The terminal inside the container on the robot should display "stand2walk"
 
 ![](./images/diagram-3.png)
 
-<font color="red">此时确保机器人急停手柄电量充足且可以随时被按下，并确认机器人周边环境安全</font>
+<font color="red">At this point, ensure that the emergency stop button on the controller has sufficient power and can be pressed at any time, and confirm that the surrounding environment of the robot is safe</font>
 
-4. 按下手柄“LB”键使能控制摇杆，两个摇杆可发出控制指令
-	- 红色箭头对应摇杆方向控制前进后退
-	- 绿色箭头对应摇杆方向控制左右横移
-	- 蓝色箭头对应摇杆方向控制左右转向
+4. Press the "LB" button on the controller to enable the control joystick, and the two joysticks can issue control commands
+   - The red arrow corresponds to the forward and backward movement of the joystick
+   - The green arrow corresponds to the left and right lateral movement of the joystick
+   - The blue arrow corresponds to the left and right turning of the joystick
 
 ![](./images/diagram-4.png)
 
-5. 按下手柄“Y”键(绿色圈出)，吊起机器人后按下手柄“start”键(蓝色圈出)，结束机器人控制
+5. Press the "Y" button (green circle) on the controller, lift the robot, and then press the "start" button (blue circle) on the controller to end the robot control
 
-![](./images/diagram-5.png)
-
-## 4.2 手柄按键逻辑
-1. “start”键：切换机器人进入或退出启动模式
-	- 启动模式：各关节位控，此时Kp很小，机器人应显性的表现为腿部臂部关节受很小的力，可以被扳动但会感受到阻力；机上的容器内终端，应显示“start control”字样
-	- 退出启动模式：此时机器人腿部臂部关节不受力，终端显示“stop control”字样
-2. "LB"和“A”键：切换机器人进入或退出位控模式
-	- 进入运控模式：机器人应显性的表现为腿部臂部关节受力，可以被小幅度扳动但会感受到阻力；机上的容器内终端，应显示“lie2stand”字样
-	- 退出运控模式：机器人回到启动模式，终端显示“stand2lie”字样
-3. “X”键：切换机器人进入运控模式
-	- 机器人可以自主站立；机上的容器内终端，应显示“stand2walk”字样
-4. “Y”键：切换机器人退出运控模式
-	- 机器人回到位控模式，终端显示“walk2stand”字样
-5. “LB”键：使能控制摇杆
-	- 该按键被按下时，手柄的两个摇杆才可以发出控制指令
+![](./images/diagram-5.png)## 4.2 Handheld Button Logic
+1. "start" button: Switches the robot to enter or exit startup mode
+	- Startup mode: Position control for each joint, at this time Kp is very small, and the robot should explicitly show that the leg and arm joints are subjected to very little force, they can be moved but with resistance; the terminal in the container on the robot should display "start control"
+	- Exit startup mode: At this time, the leg and arm joints of the robot are not subjected to any force, and the terminal displays "stop control"
+2. "LB" and "A" buttons: Switches the robot to enter or exit position control mode
+	- Enter motion control mode: The robot should explicitly show that the leg and arm joints are subjected to force, they can be slightly moved but with resistance; the terminal in the container on the robot should display "lie2stand"
+	- Exit motion control mode: The robot returns to startup mode, and the terminal displays "stand2lie"
+3. "X" button: Switches the robot to enter motion control mode
+	- The robot can stand autonomously; the terminal in the container on the robot should display "stand2walk"
+4. "Y" button: Switches the robot to exit motion control mode
+	- The robot returns to position control mode, and the terminal displays "walk2stand"
+5. "LB" button: Enables the control joysticks
+	- When this button is pressed, the two joysticks on the handheld can issue control commands
