@@ -422,7 +422,10 @@ Please read the following content carefully to ensure you understand the control
 
 5. Press the "Y" button (green circle) on the controller, lift the robot, and then press the "start" button (blue circle) on the controller to end the robot control
 
-![](./images/diagram-5.png)## 4.2 Handheld Button Logic
+![](./images/diagram-5.png)
+
+## 4.2 Handheld Button Logic
+
 1. "start" button: Switches the robot to enter or exit startup mode
 	- Startup mode: Position control for each joint, at this time Kp is very small, and the robot should explicitly show that the leg and arm joints are subjected to very little force, they can be moved but with resistance; the terminal in the container on the robot should display "start control"
 	- Exit startup mode: At this time, the leg and arm joints of the robot are not subjected to any force, and the terminal displays "stop control"
