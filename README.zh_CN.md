@@ -297,6 +297,7 @@ docker run -it \
   --ipc=host \
   --pid=host \
   -e DISPLAY=$DISPLAY \
+  -v /dev/input:/dev/input \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro \
   -v .:/home/agi/a2_deploy_workspace \
@@ -316,6 +317,7 @@ docker run -it \
   -e DISPLAY=$DISPLAY \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -v /dev/input:/dev/input \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro \
   -v .:/home/agi/a2_deploy_workspace \
