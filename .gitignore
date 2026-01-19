@@ -2,6 +2,7 @@ build/
 install/
 log/
 tmp/
+dist/
 
 mujoco-sim/bin/MUJOCO_LOG.TXT
 

@@ -1,0 +1,22 @@
+aimrt:
+  plugin:
+    plugins:
+      - name: ros2_plugin
+        path: ${AIMRT_PLUGIN_DIR}/libaimrt_ros2_plugin.so
+        options:
+          node_name: aimrl_sdk
+  log:
+    core_lvl: INFO
+    backends:
+      - type: console
+
+  channel:
+    backends:
+      - type: ros2
+
+    pub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [ros2]
+    sub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [ros2]

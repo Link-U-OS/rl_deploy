@@ -1,0 +1,9 @@
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 0
+
+SortIncludes: true
+IncludeBlocks: Preserve
+
+IndentPPDirectives: BeforeHash
+BreakStringLiterals: false
