@@ -2,6 +2,8 @@
 
 #include "core.hpp"
 
+#include <filesystem>
+#include <future>
 #include <stdexcept>
 #include <utility>
 
@@ -18,25 +20,37 @@ namespace aimrl_sdk {
 class AimrtTransport final : public Transport {
  public:
   AimrtTransport(const std::string &cfg_file_path) {
-    options.cfg_file_path = cfg_file_path;
+    options_.cfg_file_path = cfg_file_path;
+  }
+
+  ~AimrtTransport() override {
+    try {
+      stop();
+    } catch (...) {
+    }
   }
 
   void start(Callbacks callbacks) override {
+    if (started_) {
+      return;
+    }
+    started_ = true;
+
     callbacks_ = std::move(callbacks);
 
-    if (!std::filesystem::exists(options.cfg_file_path)) {
-      RCLCPP_ERROR(rclcpp::get_logger("LeggedSystemHardware"), "Config file not found: %s", options.cfg_file_path.c_str());
+    if (!std::filesystem::exists(options_.cfg_file_path)) {
+      RCLCPP_ERROR(rclcpp::get_logger("LeggedSystemHardware"), "Config file not found: %s", options_.cfg_file_path.c_str());
       exit(-1);
     }
 
-    aimrt_core.Initialize(options);
+    aimrt_core_.Initialize(options_);
 
     // Create Module
-    aimrt::CoreRef module_handle(aimrt_core.GetModuleManager().CreateModule("LeggedSystemModule"));
+    module_handle_ = aimrt::CoreRef(aimrt_core_.GetModuleManager().CreateModule("LeggedSystemModule"));
 
     // Create Publishers
-    aimrtLegCmdPublisher_ = module_handle.GetChannelHandle().GetPublisher("/body_drive/leg_joint_command");
-    aimrtArmCmdPublisher_ = module_handle.GetChannelHandle().GetPublisher("/body_drive/arm_joint_command");
+    aimrtLegCmdPublisher_ = module_handle_.GetChannelHandle().GetPublisher("/body_drive/leg_joint_command");
+    aimrtArmCmdPublisher_ = module_handle_.GetChannelHandle().GetPublisher("/body_drive/arm_joint_command");
     bool ret = aimrt::channel::RegisterPublishType<joint_msgs::msg::JointCommand>(aimrtLegCmdPublisher_);
     if (!ret) {
       throw std::runtime_error("Failed to register publish type for topic '/body_drive/leg_joint_command'");
@@ -49,33 +63,44 @@ class AimrtTransport final : public Transport {
     aimrtArmCmdPublisherProxy_ = std::make_unique<aimrt::channel::PublisherProxy<joint_msgs::msg::JointCommand>>(aimrtArmCmdPublisher_);
 
     // Create Subscribers
-    aimrtArmStateSubscriber_ = module_handle.GetChannelHandle().GetSubscriber("/body_drive/arm_joint_state");
-    aimrtLegStateSubscriber_ = module_handle.GetChannelHandle().GetSubscriber("/body_drive/leg_joint_state");
-    aimrtImuSubscriber_ = module_handle.GetChannelHandle().GetSubscriber("/body_drive/imu/data");
+    aimrtArmStateSubscriber_ = module_handle_.GetChannelHandle().GetSubscriber("/body_drive/arm_joint_state");
+    aimrtLegStateSubscriber_ = module_handle_.GetChannelHandle().GetSubscriber("/body_drive/leg_joint_state");
+    aimrtImuSubscriber_ = module_handle_.GetChannelHandle().GetSubscriber("/body_drive/imu/data");
 
-    ret = aimrt::channel::Subscribe<joint_msgs::msg::JointState>(
-        aimrtArmStateSubscriber_,
-        std::move(callbacks_.on_arm_state));
+    ret = aimrt::channel::Subscribe<joint_msgs::msg::JointState>(aimrtArmStateSubscriber_, std::move(callbacks_.on_arm_state));
     if (!ret) {
       throw std::runtime_error("Failed to subscribe to topic '/body_drive/arm_joint_state'");
     }
-    ret = aimrt::channel::Subscribe<joint_msgs::msg::JointState>(
-        aimrtLegStateSubscriber_,
-        std::move(callbacks_.on_leg_state));
+    ret = aimrt::channel::Subscribe<joint_msgs::msg::JointState>(aimrtLegStateSubscriber_, std::move(callbacks_.on_leg_state));
     if (!ret) {
       throw std::runtime_error("Failed to subscribe to topic '/body_drive/leg_joint_state'");
     }
-    ret = aimrt::channel::Subscribe<sensor_msgs::msg::Imu>(
-        aimrtImuSubscriber_,
-        std::move(callbacks_.on_imu));
+    ret = aimrt::channel::Subscribe<sensor_msgs::msg::Imu>(aimrtImuSubscriber_, std::move(callbacks_.on_imu));
     if (!ret) {
       throw std::runtime_error("Failed to subscribe to topic '/body_drive/imu/data'");
     }
-    aimrt_core.AsyncStart();
+    shutdown_future_ = aimrt_core_.AsyncStart();
   }
 
   void stop() override {
-    aimrt_core.Shutdown();
+    if (!started_) {
+      return;
+    }
+    started_ = false;
+
+    try {
+      aimrt_core_.Shutdown();
+    } catch (...) {
+    }
+
+    // Block until AsyncStart's internal shutdown thread finishes so that
+    // AimRTCore's destructor can't run while shutdown is still in progress.
+    if (shutdown_future_.valid()) {
+      try {
+        shutdown_future_.get();
+      } catch (...) {
+      }
+    }
   }
 
   void publish_arm_command(TimestampNs stamp, Sequence32 seq,
@@ -138,10 +163,13 @@ class AimrtTransport final : public Transport {
   }
 
  private:
+  bool started_{false};
+  std::future<void> shutdown_future_;
+
   Callbacks callbacks_{};
-  aimrt::runtime::core::AimRTCore aimrt_core;
-  aimrt::runtime::core::AimRTCore::Options options;
-  aimrt::CoreRef module_handle;
+  aimrt::runtime::core::AimRTCore aimrt_core_;
+  aimrt::runtime::core::AimRTCore::Options options_;
+  aimrt::CoreRef module_handle_;
   aimrt::channel::SubscriberRef aimrtArmStateSubscriber_;
   aimrt::channel::SubscriberRef aimrtLegStateSubscriber_;
   aimrt::channel::SubscriberRef aimrtImuSubscriber_;
