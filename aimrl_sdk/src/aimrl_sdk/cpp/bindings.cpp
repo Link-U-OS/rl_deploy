@@ -2,8 +2,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #if !defined(_WIN32)
   #include <dlfcn.h>
 #else
@@ -94,6 +96,49 @@ std::optional<double> parse_timeout(const py::object &o) {
   if (o.is_none())
     return std::nullopt;
   return py::cast<double>(o);
+}
+
+std::string resolve_config_path(const py::object &config_path) {
+  if (config_path.is_none())
+    return default_config_path();
+  auto s = py::cast<std::string>(config_path);
+  if (s.empty())
+    return default_config_path();
+  return s;
+}
+
+std::vector<std::string> default_arm_names() {
+  return {
+      "idx13_left_arm_joint1",
+      "idx14_left_arm_joint2",
+      "idx15_left_arm_joint3",
+      "idx16_left_arm_joint4",
+      "idx17_left_arm_joint5",
+      "idx18_01_left_wrist_rod_A_joint",
+      "idx19_01_left_wrist_rod_B_joint",
+      "idx20_right_arm_joint1",
+      "idx21_right_arm_joint2",
+      "idx22_right_arm_joint3",
+      "idx23_right_arm_joint4",
+      "idx24_right_arm_joint5",
+      "idx25_01_right_wrist_rod_A_joint",
+      "idx26_01_right_wrist_rod_B_joint"};
+}
+
+std::vector<std::string> default_leg_names() {
+  return {
+      "idx01_left_hip_roll",
+      "idx02_left_hip_yaw",
+      "idx03_left_hip_pitch",
+      "idx04_left_tarsus",
+      "idx05_01_left_toe_motorA",
+      "idx06_01_left_toe_motorB",
+      "idx07_right_hip_roll",
+      "idx08_right_hip_yaw",
+      "idx09_right_hip_pitch",
+      "idx10_right_tarsus",
+      "idx11_01_right_toe_motorA",
+      "idx12_01_right_toe_motorB"};
 }
 
 }  // namespace
@@ -231,46 +276,69 @@ PYBIND11_MODULE(_bindings, m) {
           },
           py::arg("stamp_ns") = py::none(), py::arg("sequence") = py::none());
 
-  m.def("open", []() {
-    Core::Options opt;
-    opt.arm_names = {
-        "idx13_left_arm_joint1",
-        "idx14_left_arm_joint2",
-        "idx15_left_arm_joint3",
-        "idx16_left_arm_joint4",
-        "idx17_left_arm_joint5",
-        "idx18_01_left_wrist_rod_A_joint",
-        "idx19_01_left_wrist_rod_B_joint",
-        "idx20_right_arm_joint1",
-        "idx21_right_arm_joint2",
-        "idx22_right_arm_joint3",
-        "idx23_right_arm_joint4",
-        "idx24_right_arm_joint5",
-        "idx25_01_right_wrist_rod_A_joint",
-        "idx26_01_right_wrist_rod_B_joint"};
-    opt.leg_names = {
-        "idx01_left_hip_roll",
-        "idx02_left_hip_yaw",
-        "idx03_left_hip_pitch",
-        "idx04_left_tarsus",
-        "idx05_01_left_toe_motorA",
-        "idx06_01_left_toe_motorB",
-        "idx07_right_hip_roll",
-        "idx08_right_hip_yaw",
-        "idx09_right_hip_pitch",
-        "idx10_right_tarsus",
-        "idx11_01_right_toe_motorA",
-        "idx12_01_right_toe_motorB"};
+  m.def(
+      "open",
+      [](const py::object &config_path, double sync_hz, double max_skew_ms,
+         int max_backtrack, bool require_all, bool drop_invalid,
+         std::uint32_t raw_ring, std::uint32_t frame_ring,
+         const py::object &arm_names, const py::object &leg_names) {
+        Core::Options opt;
+        opt.raw_ring = raw_ring;
+        opt.frame_ring = frame_ring;
 
-    auto core = std::make_shared<Core>(
-        opt, std::make_unique<aimrl_sdk::AimrtTransport>(default_config_path()));
-    core->start();
-    g_last_core = core;
+        opt.sync.frame_hz = sync_hz;
+        if (!std::isfinite(max_skew_ms) || max_skew_ms < 0.0) {
+          throw std::invalid_argument("max_skew_ms must be >= 0");
+        }
+        const auto max_skew_ns_f = max_skew_ms * 1e6;
+        if (!std::isfinite(max_skew_ns_f) ||
+            max_skew_ns_f >
+                static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+          throw std::invalid_argument("max_skew_ms out of range");
+        }
+        opt.sync.max_skew_ns = static_cast<std::int64_t>(max_skew_ns_f);
+        opt.sync.max_backtrack = max_backtrack;
+        opt.sync.require_all = require_all;
+        opt.sync.drop_invalid = drop_invalid;
 
-    PyState st{.core = core};
-    PyCmd cmd{.core = core};
-    return py::make_tuple(st, cmd);
-  });
+        opt.arm_names = default_arm_names();
+        opt.leg_names = default_leg_names();
+        if (!arm_names.is_none())
+          opt.arm_names = py::cast<std::vector<std::string>>(arm_names);
+        if (!leg_names.is_none())
+          opt.leg_names = py::cast<std::vector<std::string>>(leg_names);
+
+        const auto cfg = resolve_config_path(config_path);
+        auto core = std::make_shared<Core>(
+            opt, std::make_unique<aimrl_sdk::AimrtTransport>(cfg));
+        core->start();
+        g_last_core = core;
+
+        PyState st{.core = core};
+        PyCmd cmd{.core = core};
+        return py::make_tuple(st, cmd);
+      },
+      R"pbdoc(
+Open the AimRL SDK and return `(state, cmd)`.
+
+Args:
+  config_path: Optional path to the AimRT backend YAML. If None/empty, uses
+    `AIMRL_SDK_CONFIG` (if set) or the built-in default.
+  sync_hz: Frame synchronization frequency (Hz) for generating aligned frames.
+  max_skew_ms: Max allowed timestamp skew (ms) for a frame to be marked `valid`.
+  max_backtrack: Max samples to scan backward per tick to find `<= tick` samples.
+  require_all: If True, mark frame invalid if any of arm/leg/imu is missing.
+  drop_invalid: If True, invalid frames are not written to the frame ring.
+  raw_ring: Raw sample ring capacity (arm/leg/imu).
+  frame_ring: Aligned frame ring capacity.
+  arm_names: Optional list[str] of length 14 for command joint names.
+  leg_names: Optional list[str] of length 12 for command joint names.
+)pbdoc",
+      py::arg("config_path") = py::none(), py::arg("sync_hz") = 100.0,
+      py::arg("max_skew_ms") = 3.0, py::arg("max_backtrack") = 200,
+      py::arg("require_all") = true, py::arg("drop_invalid") = false,
+      py::arg("raw_ring") = 2048, py::arg("frame_ring") = 512,
+      py::arg("arm_names") = py::none(), py::arg("leg_names") = py::none());
 
   m.def("close", [](const py::object &handle) {
     std::shared_ptr<Core> core;

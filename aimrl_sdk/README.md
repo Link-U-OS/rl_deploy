@@ -13,4 +13,8 @@ The example shows how to:
 - run a dummy policy, and
 - send joint commands.
 
-If your config file is elsewhere, set `AIMRL_SDK_CONFIG` to the YAML path.
+If your config file is elsewhere, either:
+- pass `config_path=...` to `aimrl_sdk.open()`, or
+- set `AIMRL_SDK_CONFIG` to the YAML path.
+
+You can also set the aligned-frame sync frequency via `aimrl_sdk.open(sync_hz=...)`.
