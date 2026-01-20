@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AIMRL C++ SDK Python bindings via pybind11"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.21"]
+dependencies = ["numpy>=1.21", "loguru>=0.7.0"]
 
 [build-system]
 requires = [
