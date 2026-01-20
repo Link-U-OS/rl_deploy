@@ -14,6 +14,7 @@
 
 #include "aimrt_transport.hpp"
 #include "core.hpp"
+#include "layout.hpp"
 
 namespace py = pybind11;
 using namespace aimrl_sdk;
@@ -155,6 +156,20 @@ struct PyCmd {
 PYBIND11_MODULE(_bindings, m) {
   init_module_dir(m);
 
+  // ---- observation layout constants (single source of truth) ----
+  m.attr("ARM_DOF") = py::int_(kArmDof);
+  m.attr("LEG_DOF") = py::int_(kLegDof);
+  m.attr("FRAME_DIM") = py::int_(kFrameDim);
+  m.attr("ARM_POS0") = py::int_(FrameLayout::ArmPos0);
+  m.attr("ARM_VEL0") = py::int_(FrameLayout::ArmVel0);
+  m.attr("ARM_EFF0") = py::int_(FrameLayout::ArmEff0);
+  m.attr("LEG_POS0") = py::int_(FrameLayout::LegPos0);
+  m.attr("LEG_VEL0") = py::int_(FrameLayout::LegVel0);
+  m.attr("LEG_EFF0") = py::int_(FrameLayout::LegEff0);
+  m.attr("IMU_QUAT0") = py::int_(FrameLayout::ImuQuat0);
+  m.attr("IMU_GYRO0") = py::int_(FrameLayout::ImuGyro0);
+  m.attr("IMU_ACC0") = py::int_(FrameLayout::ImuAcc0);
+
   py::class_<PyState>(m, "StateInterface")
       .def("latest_frame",
            [](PyState &self) {
@@ -281,7 +296,13 @@ PYBIND11_MODULE(_bindings, m) {
       [](const py::object &config_path, double sync_hz, double max_skew_ms,
          int max_backtrack, bool require_all, bool drop_invalid,
          std::uint32_t raw_ring, std::uint32_t frame_ring,
-         const py::object &arm_names, const py::object &leg_names) {
+         const py::object &arm_names, const py::object &leg_names,
+         bool use_closed_ankle, bool ankle_torque_control,
+         int ankle_motor1_direction, int ankle_motor2_direction,
+         int ankle_pitch_direction, int ankle_roll_direction, double ankle_d,
+         double ankle_l, double ankle_h1, double ankle_h2,
+         double ankle_actuator_pos_limit, double ankle_pitch_limit,
+         double ankle_roll_limit) {
         Core::Options opt;
         opt.raw_ring = raw_ring;
         opt.frame_ring = frame_ring;
@@ -300,6 +321,20 @@ PYBIND11_MODULE(_bindings, m) {
         opt.sync.max_backtrack = max_backtrack;
         opt.sync.require_all = require_all;
         opt.sync.drop_invalid = drop_invalid;
+
+        opt.use_closed_ankle = use_closed_ankle;
+        opt.ankle_torque_control = ankle_torque_control;
+        opt.closed_ankle.motor1_direction = ankle_motor1_direction;
+        opt.closed_ankle.motor2_direction = ankle_motor2_direction;
+        opt.closed_ankle.pitch_direction = ankle_pitch_direction;
+        opt.closed_ankle.roll_direction = ankle_roll_direction;
+        opt.closed_ankle.d = ankle_d;
+        opt.closed_ankle.l = ankle_l;
+        opt.closed_ankle.h1 = ankle_h1;
+        opt.closed_ankle.h2 = ankle_h2;
+        opt.closed_ankle.actuator_pos_limit = ankle_actuator_pos_limit;
+        opt.closed_ankle.pitch_limit = ankle_pitch_limit;
+        opt.closed_ankle.roll_limit = ankle_roll_limit;
 
         opt.arm_names = default_arm_names();
         opt.leg_names = default_leg_names();
@@ -321,7 +356,7 @@ PYBIND11_MODULE(_bindings, m) {
       R"pbdoc(
 Open the AimRL SDK and return `(state, cmd)`.
 
-Args:
+  Args:
   config_path: Optional path to the AimRT backend YAML. If None/empty, uses
     `AIMRL_SDK_CONFIG` (if set) or the built-in default.
   sync_hz: Frame synchronization frequency (Hz) for generating aligned frames.
@@ -333,12 +368,25 @@ Args:
   frame_ring: Aligned frame ring capacity.
   arm_names: Optional list[str] of length 14 for command joint names.
   leg_names: Optional list[str] of length 12 for command joint names.
+  use_closed_ankle: If True, convert the ankle closed-chain motors (toe A/B)
+    to ankle (pitch,roll) for frames, and convert commands back to motors.
+  ankle_torque_control: If True and `use_closed_ankle`, ankle motors are
+    commanded in effort (torque) based on (pitch,roll) PD in `commit()`.
+  ankle_*: Closed-chain ankle geometry/sign parameters (advanced).
 )pbdoc",
       py::arg("config_path") = py::none(), py::arg("sync_hz") = 100.0,
       py::arg("max_skew_ms") = 3.0, py::arg("max_backtrack") = 200,
       py::arg("require_all") = true, py::arg("drop_invalid") = false,
       py::arg("raw_ring") = 2048, py::arg("frame_ring") = 512,
-      py::arg("arm_names") = py::none(), py::arg("leg_names") = py::none());
+      py::arg("arm_names") = py::none(), py::arg("leg_names") = py::none(),
+      py::arg("use_closed_ankle") = true,
+      py::arg("ankle_torque_control") = true,
+      py::arg("ankle_motor1_direction") = 1,
+      py::arg("ankle_motor2_direction") = 1, py::arg("ankle_pitch_direction") = 1,
+      py::arg("ankle_roll_direction") = 1, py::arg("ankle_d") = 0.0315,
+      py::arg("ankle_l") = 0.063, py::arg("ankle_h1") = 0.239,
+      py::arg("ankle_h2") = 0.145, py::arg("ankle_actuator_pos_limit") = 1.0,
+      py::arg("ankle_pitch_limit") = 1.0, py::arg("ankle_roll_limit") = 0.5);
 
   m.def("close", [](const py::object &handle) {
     std::shared_ptr<Core> core;

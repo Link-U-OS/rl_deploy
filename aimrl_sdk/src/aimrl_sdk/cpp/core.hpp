@@ -9,6 +9,7 @@
 #include <thread>  // jthread
 #include <vector>
 
+#include "closed_ankle.hpp"
 #include "ring_buffer.hpp"
 #include "types.hpp"
 
@@ -50,6 +51,9 @@ class Core final {
     std::uint32_t raw_ring{2048};
     std::uint32_t frame_ring{512};
     SyncConfig sync{};
+    bool use_closed_ankle{true};
+    bool ankle_torque_control{true};
+    ClosedAnkleParams closed_ankle{};
     // internal fixed order name (not exposed to Python)
     std::vector<std::string> arm_names;  // size=14
     std::vector<std::string> leg_names;  // size=12

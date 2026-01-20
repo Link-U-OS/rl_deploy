@@ -1,4 +1,6 @@
 from . import _bindings as _bindings
+from .obs import OBS as OBS
+from .obs import ObsSlices as ObsSlices
 
 import os
 
@@ -46,4 +48,5 @@ close = _bindings.close
 StateInterface = _bindings.StateInterface
 CommandInterface = _bindings.CommandInterface
 
-__all__ = ["open", "close", "StateInterface", "CommandInterface"]
+
+__all__ = ["open", "close", "StateInterface", "CommandInterface", "OBS", "ObsSlices"]

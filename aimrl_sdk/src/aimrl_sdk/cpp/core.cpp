@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -228,6 +227,71 @@ static void fill_arm_leg_imu(Frame &out, const JointSample<kArmDof> &arm,
         static_cast<float>(imu.acc[static_cast<std::size_t>(i)]);
 }
 
+namespace {
+
+using closed_ankle_detail::LoopAnkleAnalyticalSolver;
+using closed_ankle_detail::Vec2;
+
+bool read_latest_leg_motor_(const RingBuffer<JointSample<kLegDof>> &ring,
+                            JointSample<kLegDof> &out) {
+  auto idx = ring.latest_index();
+  if (idx == 0)
+    return false;
+  for (int i = 0; i < 3 && idx > 0; ++i, --idx) {
+    if (ring.read_at(idx, out))
+      return true;
+  }
+  return false;
+}
+
+void apply_closed_ankle_state_(JointSample<kLegDof> &leg,
+                               const ClosedAnkleParams &p) {
+  // This mirrors `deploy/legged_system/src/LeggedSystem.cpp::processClosedChainState()`
+  // but only for the 12-DOF legs (hip + tarsus + toe_pitch/toe_roll).
+  thread_local LoopAnkleAnalyticalSolver solver;
+
+  for (int leg_index = 0; leg_index < 2; ++leg_index) {
+    const int base = leg_index * 6;
+    const int idx_m0 = base + 4;  // motorA in /body_drive topic ordering
+    const int idx_m1 = base + 5;  // motorB in /body_drive topic ordering
+
+    closed_ankle_detail::solver_link_lengths_for_leg(solver, leg_index, p);
+
+    const Vec2 mc_pos_actual{leg.pos[static_cast<std::size_t>(idx_m0)],
+                             leg.pos[static_cast<std::size_t>(idx_m1)]};
+    const Vec2 mc_vel_actual{leg.vel[static_cast<std::size_t>(idx_m0)],
+                             leg.vel[static_cast<std::size_t>(idx_m1)]};
+    const Vec2 mc_tau_actual{leg.eff[static_cast<std::size_t>(idx_m0)],
+                             leg.eff[static_cast<std::size_t>(idx_m1)]};
+
+    const Vec2 mc_pos = closed_ankle_detail::solver_mc_from_actual(leg_index, mc_pos_actual, p);
+    const Vec2 mc_vel = closed_ankle_detail::solver_mc_from_actual(leg_index, mc_vel_actual, p);
+    const Vec2 mc_tau = closed_ankle_detail::solver_mc_from_actual(leg_index, mc_tau_actual, p);
+
+    Vec2 pr = solver.FK(mc_pos);  // physical sign
+    pr.v0 = closed_ankle_detail::clamp_abs(pr.v0, p.pitch_limit);
+    pr.v1 = closed_ankle_detail::clamp_abs(pr.v1, p.roll_limit);
+    pr = closed_ankle_detail::apply_pr_direction(pr, p);  // controller sign
+
+    solver.UpdateJ1(mc_pos);
+
+    Vec2 vel_pr = solver.DFK(mc_vel);
+    vel_pr = closed_ankle_detail::apply_pr_direction(vel_pr, p);
+
+    Vec2 tau_pr = solver.FDyn(mc_tau);
+    tau_pr = closed_ankle_detail::apply_pr_direction(tau_pr, p);
+
+    leg.pos[static_cast<std::size_t>(idx_m0)] = pr.v0;   // toe_pitch
+    leg.pos[static_cast<std::size_t>(idx_m1)] = pr.v1;   // toe_roll
+    leg.vel[static_cast<std::size_t>(idx_m0)] = vel_pr.v0;
+    leg.vel[static_cast<std::size_t>(idx_m1)] = vel_pr.v1;
+    leg.eff[static_cast<std::size_t>(idx_m0)] = tau_pr.v0;
+    leg.eff[static_cast<std::size_t>(idx_m1)] = tau_pr.v1;
+  }
+}
+
+}  // namespace
+
 void Core::sync_loop_(const std::stop_token &stoken) {
   const auto period_ns = static_cast<std::int64_t>(1e9 / opt_.sync.frame_hz);
 
@@ -285,7 +349,13 @@ void Core::sync_loop_(const std::stop_token &stoken) {
       continue;
 
     if (arm_ok && leg_ok && imu_ok) {
-      fill_arm_leg_imu(out, arm, leg, imu);
+      if (opt_.use_closed_ankle) {
+        auto leg_joint = leg;  // convert motor-space ankle -> (pitch,roll)
+        apply_closed_ankle_state_(leg_joint, opt_.closed_ankle);
+        fill_arm_leg_imu(out, arm, leg_joint, imu);
+      } else {
+        fill_arm_leg_imu(out, arm, leg, imu);
+      }
     }
 
     frame_ring_.write([&](Frame &dst) { dst = out; });
@@ -362,12 +432,133 @@ void Core::set_leg_scalar(Field f, double scalar) {
 
 void Core::commit(std::optional<TimestampNs> stamp,
                   std::optional<Sequence32> seq) {
-  std::lock_guard lk(cmd_mtx_);
-  const auto s = stamp.value_or(now_system_ns());
-  const auto q = seq.value_or(Sequence32{++commit_seq_});
+  PendingCommand<kArmDof> arm_cmd{};
+  PendingCommand<kLegDof> leg_cmd{};
+  TimestampNs s{};
+  Sequence32 q{};
+  {
+    std::lock_guard lk(cmd_mtx_);
+    s = stamp.value_or(now_system_ns());
+    q = seq.value_or(Sequence32{++commit_seq_});
+    arm_cmd = arm_pending_;
+    leg_cmd = leg_pending_;
+  }
 
-  transport_->publish_arm_command(s, q, arm_pending_, opt_.arm_names);
-  transport_->publish_leg_command(s, q, leg_pending_, opt_.leg_names);
+  if (opt_.use_closed_ankle) {
+    JointSample<kLegDof> leg_motor{};
+    if (read_latest_leg_motor_(leg_raw_, leg_motor)) {
+      thread_local LoopAnkleAnalyticalSolver solver;
+      const auto &p = opt_.closed_ankle;
+
+      for (int leg_index = 0; leg_index < 2; ++leg_index) {
+        const int base = leg_index * 6;
+        const int idx_m0 = base + 4;
+        const int idx_m1 = base + 5;
+
+        closed_ankle_detail::solver_link_lengths_for_leg(solver, leg_index, p);
+
+        const Vec2 cur_mc_pos_actual{leg_motor.pos[static_cast<std::size_t>(idx_m0)],
+                                     leg_motor.pos[static_cast<std::size_t>(idx_m1)]};
+        const Vec2 cur_mc_vel_actual{leg_motor.vel[static_cast<std::size_t>(idx_m0)],
+                                     leg_motor.vel[static_cast<std::size_t>(idx_m1)]};
+        const Vec2 cur_mc_pos = closed_ankle_detail::solver_mc_from_actual(leg_index, cur_mc_pos_actual, p);
+        const Vec2 cur_mc_vel = closed_ankle_detail::solver_mc_from_actual(leg_index, cur_mc_vel_actual, p);
+
+        // current ankle state in controller sign
+        Vec2 cur_pr = solver.FK(cur_mc_pos);
+        cur_pr.v0 = closed_ankle_detail::clamp_abs(cur_pr.v0, p.pitch_limit);
+        cur_pr.v1 = closed_ankle_detail::clamp_abs(cur_pr.v1, p.roll_limit);
+        cur_pr = closed_ankle_detail::apply_pr_direction(cur_pr, p);
+
+        solver.UpdateJ1(cur_mc_pos);
+
+        Vec2 cur_vel_pr = solver.DFK(cur_mc_vel);
+        cur_vel_pr = closed_ankle_detail::apply_pr_direction(cur_vel_pr, p);
+
+        // desired ankle command in controller sign (reuse cmd arrays at indices 4/5 and 10/11)
+        Vec2 des_pr{leg_cmd.pos[static_cast<std::size_t>(idx_m0)],
+                    leg_cmd.pos[static_cast<std::size_t>(idx_m1)]};
+        des_pr.v0 = closed_ankle_detail::clamp_abs(des_pr.v0, p.pitch_limit);
+        des_pr.v1 = closed_ankle_detail::clamp_abs(des_pr.v1, p.roll_limit);
+
+        Vec2 des_vel_pr{leg_cmd.vel[static_cast<std::size_t>(idx_m0)],
+                        leg_cmd.vel[static_cast<std::size_t>(idx_m1)]};
+        Vec2 ff_tau_pr{leg_cmd.eff[static_cast<std::size_t>(idx_m0)],
+                       leg_cmd.eff[static_cast<std::size_t>(idx_m1)]};
+        const Vec2 kp{leg_cmd.kp[static_cast<std::size_t>(idx_m0)],
+                      leg_cmd.kp[static_cast<std::size_t>(idx_m1)]};
+        const Vec2 kd{leg_cmd.kd[static_cast<std::size_t>(idx_m0)],
+                      leg_cmd.kd[static_cast<std::size_t>(idx_m1)]};
+
+        if (opt_.ankle_torque_control) {
+          // PD in ankle (pitch/roll) space -> convert to motor torques.
+          const Vec2 tau_pr_ctrl{
+              ff_tau_pr.v0 + kp.v0 * (des_pr.v0 - cur_pr.v0) + kd.v0 * (des_vel_pr.v0 - cur_vel_pr.v0),
+              ff_tau_pr.v1 + kp.v1 * (des_pr.v1 - cur_pr.v1) + kd.v1 * (des_vel_pr.v1 - cur_vel_pr.v1),
+          };
+
+          const Vec2 tau_pr_phys = closed_ankle_detail::remove_pr_direction(tau_pr_ctrl, p);
+          const Vec2 tau_m_solver = solver.IDyn(tau_pr_phys);
+          const Vec2 tau_m_actual = closed_ankle_detail::actual_mc_from_solver(leg_index, tau_m_solver, p);
+
+          // For ankle motors, publish effort (torque) only (mirrors deploy's default behavior).
+          leg_cmd.pos[static_cast<std::size_t>(idx_m0)] = 0.0;
+          leg_cmd.pos[static_cast<std::size_t>(idx_m1)] = 0.0;
+          leg_cmd.vel[static_cast<std::size_t>(idx_m0)] = 0.0;
+          leg_cmd.vel[static_cast<std::size_t>(idx_m1)] = 0.0;
+          leg_cmd.eff[static_cast<std::size_t>(idx_m0)] = tau_m_actual.v0;
+          leg_cmd.eff[static_cast<std::size_t>(idx_m1)] = tau_m_actual.v1;
+          leg_cmd.kp[static_cast<std::size_t>(idx_m0)] = 0.0;
+          leg_cmd.kp[static_cast<std::size_t>(idx_m1)] = 0.0;
+          leg_cmd.kd[static_cast<std::size_t>(idx_m0)] = 0.0;
+          leg_cmd.kd[static_cast<std::size_t>(idx_m1)] = 0.0;
+        } else {
+          // Position-space conversion (pitch/roll -> motor angles). Gains are not mapped.
+          const Vec2 des_pr_phys = closed_ankle_detail::remove_pr_direction(des_pr, p);
+          const Vec2 des_mc_solver = solver.IK(des_pr_phys);
+          Vec2 des_mc_actual = closed_ankle_detail::actual_mc_from_solver(leg_index, des_mc_solver, p);
+          des_mc_actual.v0 = closed_ankle_detail::clamp_abs(des_mc_actual.v0, p.actuator_pos_limit);
+          des_mc_actual.v1 = closed_ankle_detail::clamp_abs(des_mc_actual.v1, p.actuator_pos_limit);
+
+          leg_cmd.pos[static_cast<std::size_t>(idx_m0)] = des_mc_actual.v0;
+          leg_cmd.pos[static_cast<std::size_t>(idx_m1)] = des_mc_actual.v1;
+          leg_cmd.vel[static_cast<std::size_t>(idx_m0)] = 0.0;
+          leg_cmd.vel[static_cast<std::size_t>(idx_m1)] = 0.0;
+          leg_cmd.eff[static_cast<std::size_t>(idx_m0)] = 0.0;
+          leg_cmd.eff[static_cast<std::size_t>(idx_m1)] = 0.0;
+
+          // Map (pitch,roll) PD gains to motor-space gains using current Jacobian:
+          //   K_m ~= J^T * K_pr * J   (diagonal approximation).
+          const auto col0 = solver.DFK(Vec2{1.0, 0.0});
+          const auto col1 = solver.DFK(Vec2{0.0, 1.0});
+          auto kp_m0_solver = kp.v0 * col0.v0 * col0.v0 + kp.v1 * col0.v1 * col0.v1;
+          auto kp_m1_solver = kp.v0 * col1.v0 * col1.v0 + kp.v1 * col1.v1 * col1.v1;
+          auto kd_m0_solver = kd.v0 * col0.v0 * col0.v0 + kd.v1 * col0.v1 * col0.v1;
+          auto kd_m1_solver = kd.v0 * col1.v0 * col1.v0 + kd.v1 * col1.v1 * col1.v1;
+          if (!std::isfinite(kp_m0_solver) || kp_m0_solver < 0.0)
+            kp_m0_solver = 0.0;
+          if (!std::isfinite(kp_m1_solver) || kp_m1_solver < 0.0)
+            kp_m1_solver = 0.0;
+          if (!std::isfinite(kd_m0_solver) || kd_m0_solver < 0.0)
+            kd_m0_solver = 0.0;
+          if (!std::isfinite(kd_m1_solver) || kd_m1_solver < 0.0)
+            kd_m1_solver = 0.0;
+
+          const double kp_actual0 = (leg_index == 0) ? kp_m1_solver : kp_m0_solver;
+          const double kp_actual1 = (leg_index == 0) ? kp_m0_solver : kp_m1_solver;
+          const double kd_actual0 = (leg_index == 0) ? kd_m1_solver : kd_m0_solver;
+          const double kd_actual1 = (leg_index == 0) ? kd_m0_solver : kd_m1_solver;
+          leg_cmd.kp[static_cast<std::size_t>(idx_m0)] = kp_actual0;
+          leg_cmd.kp[static_cast<std::size_t>(idx_m1)] = kp_actual1;
+          leg_cmd.kd[static_cast<std::size_t>(idx_m0)] = kd_actual0;
+          leg_cmd.kd[static_cast<std::size_t>(idx_m1)] = kd_actual1;
+        }
+      }
+    }
+  }
+
+  transport_->publish_arm_command(s, q, arm_cmd, opt_.arm_names);
+  transport_->publish_leg_command(s, q, leg_cmd, opt_.leg_names);
 }
 
 }  // namespace aimrl_sdk

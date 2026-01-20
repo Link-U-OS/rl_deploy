@@ -1,0 +1,47 @@
+control:
+  hz: 100.0
+  sync_hz: 100.0
+
+model:
+  path: ../policy/model.onnx
+
+robot:
+  # 12-DoF leg order:
+  # [L_hip_roll, L_hip_yaw, L_hip_pitch, L_tarsus, L_toe_pitch, L_toe_roll,
+  #  R_hip_roll, R_hip_yaw, R_hip_pitch, R_tarsus, R_toe_pitch, R_toe_roll]
+  leg_default_joint_angles: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  leg_stiffness: [55.0, 55.0, 60.0, 85.0, 25.0, 25.0, 55.0, 55.0, 60.0, 85.0, 25.0, 25.0]
+  leg_damping: [5.0, 3.0, 6.0, 7.0, 0.2, 0.2, 5.0, 3.0, 6.0, 7.0, 0.2, 0.2]
+
+policy:
+  action_scale: 0.5
+  clip_actions: 100.0
+
+phase:
+  cycle_time: 1.2
+  sw_mode: true
+  cmd_threshold: 0.05
+
+observation:
+  size: 47
+  num_hist: 66
+  clip: 100.0
+
+  # Observation composition (concatenated in order):
+  # - command: [sin(2πphase), cos(2πphase), cmd_x, cmd_y, cmd_yaw] (5)
+  # - leg_pos: (leg_pos - leg_default_joint_angles) * scale (12)
+  # - leg_vel: leg_vel * scale (12)
+  # - last_actions: previous action (12)
+  # - imu_gyro: imu_gyro_xyz * scale (3)
+  # - imu_euler: euler_xyz_from_quat * scale (3)
+  components:
+    - type: command
+    - type: leg_pos
+      scale: 1.0
+    - type: leg_vel
+      scale: 0.05
+    - type: last_actions
+    - type: imu_gyro
+      scale: 1.0
+    - type: imu_euler
+      scale: 1.0
