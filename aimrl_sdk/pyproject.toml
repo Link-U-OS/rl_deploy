@@ -18,4 +18,6 @@ build-backend = "scikit_build_core.build"
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"
-wheel.expand-macos-universal-tags = true
+
+[tool.ruff]
+line-length = 120
