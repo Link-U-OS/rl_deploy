@@ -12,6 +12,7 @@ from loguru import logger
 
 import aimrl_sdk
 from rl_deploy_config import AppCfg, component_dim, load_app_cfg
+from teleop_control import MotionFSM, TeleopInput
 
 
 def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
@@ -171,9 +172,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sync-hz", type=float, default=None)
     p.add_argument("--model", type=Path, default=None)
     p.add_argument("--cfg", type=Path, default=default_cfg)
-    p.add_argument("--cmd-x", type=float, default=0.0)
-    p.add_argument("--cmd-y", type=float, default=0.0)
-    p.add_argument("--cmd-yaw", type=float, default=0.0)
+    p.add_argument("--cmd-x", type=float, default=0.0, help="initial command x (forward)")
+    p.add_argument("--cmd-y", type=float, default=0.0, help="initial command y (left/right)")
+    p.add_argument("--cmd-yaw", type=float, default=0.0, help="initial command yaw (turn)")
+    p.add_argument("--joystick", type=Path, default=Path("/dev/input/js0"), help="Linux joystick device path")
     return p.parse_args()
 
 
@@ -210,24 +212,44 @@ def main() -> None:
     dt = 1.0 / control_hz
     log_every = max(1, int(control_hz))
     arm_zero = np.zeros(14, dtype=np.float64)
+    teleop = TeleopInput(args.joystick, init_cmd=(cmd_x, cmd_y, cmd_yaw))
+    fsm = MotionFSM(app_cfg)
 
     try:
         loop_idx = 0
+        last_aligned = True
+        last_align_warn_t = 0.0
         while True:
             loop_idx += 1
             stamp_ns, aligned, obs = state.latest_frame()
 
             if not aligned:
-                logger.warning("Latest frame is not aligned")
+                now = time.monotonic()
+                if last_aligned or (now - last_align_warn_t) >= 1.0:
+                    logger.warning("Latest frame is not aligned")
+                    last_align_warn_t = now
+                last_aligned = False
+            elif not last_aligned:
+                logger.info("Frames are aligned again")
+                last_aligned = True
+
+            snap = teleop.poll()
+            if snap.quit_edge:
+                raise KeyboardInterrupt
+            fsm.on_input(snap, obs)
 
             start_time = time.time()
-            leg_pos_des = policy.step(obs, cmd_x, cmd_y, cmd_yaw).astype(np.float64)
+            leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
             end_time = time.time()
             if loop_idx % log_every == 0:
-                logger.info(f"policy time: {(end_time - start_time) * 1000.0:.3f} ms")
+                logger.info(
+                    f"mode={fsm.mode.value} start={int(fsm.start_control)} emg={int(fsm.emergency_stop)} "
+                    f"deadman={int(snap.deadman)} cmd=({snap.cmd_x:.2f},{snap.cmd_y:.2f},{snap.cmd_yaw:.2f}) "
+                    f"step_time={(end_time - start_time) * 1000.0:.3f} ms"
+                )
 
             start_time = time.time()
-            cmd.set_leg(position=leg_pos_des, stiffness=app_cfg.leg_stiffness, damping=app_cfg.leg_damping)
+            cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)
             cmd.set_arm(position=arm_zero, stiffness=0.0, damping=0.0)
             cmd.commit(stamp_ns=stamp_ns)
             end_time = time.time()
@@ -239,6 +261,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        teleop.close()
         aimrl_sdk.close(state)
 
 
