@@ -176,6 +176,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cmd-y", type=float, default=0.0, help="initial command y (left/right)")
     p.add_argument("--cmd-yaw", type=float, default=0.0, help="initial command yaw (turn)")
     p.add_argument("--joystick", type=Path, default=Path("/dev/input/js0"), help="Linux joystick device path")
+    p.add_argument(
+        "--no-fsm",
+        action="store_true",
+        help="Disable motion FSM; start directly in WALK (policy) mode and only gate motion by deadman",
+    )
     return p.parse_args()
 
 
@@ -213,7 +218,8 @@ def main() -> None:
     log_every = max(1, int(control_hz))
     arm_zero = np.zeros(14, dtype=np.float64)
     teleop = TeleopInput(args.joystick, init_cmd=(cmd_x, cmd_y, cmd_yaw))
-    fsm = MotionFSM(app_cfg)
+    fsm = MotionFSM(app_cfg) if not args.no_fsm else None
+    emergency_stop = False
 
     try:
         loop_idx = 0
@@ -236,17 +242,42 @@ def main() -> None:
             snap = teleop.poll()
             if snap.quit_edge:
                 raise KeyboardInterrupt
-            fsm.on_input(snap, obs)
+            if fsm is not None:
+                fsm.on_input(snap, obs)
+            else:
+                if snap.emergency_stop_edge:
+                    emergency_stop = True
+                    logger.warning("Emergency stop set (no-fsm mode); press 'p' to clear")
+                if snap.start_control_edge and emergency_stop:
+                    emergency_stop = False
+                    logger.warning("Emergency stop cleared (no-fsm mode)")
 
             start_time = time.time()
-            leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
+            if fsm is not None:
+                leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
+            else:
+                if emergency_stop:
+                    leg_pos_des = obs[aimrl_sdk.OBS.leg_pos].astype(np.float64, copy=False)
+                    leg_stiffness = np.zeros(12, dtype=np.float64)
+                    leg_damping = np.array(app_cfg.leg_damping, dtype=np.float64)
+                else:
+                    leg_pos_des = policy.step(obs, snap.cmd_x, snap.cmd_y, snap.cmd_yaw).astype(np.float64, copy=False)
+                    leg_stiffness = np.array(app_cfg.leg_stiffness, dtype=np.float64)
+                    leg_damping = np.array(app_cfg.leg_damping, dtype=np.float64)
             end_time = time.time()
             if loop_idx % log_every == 0:
-                logger.info(
-                    f"mode={fsm.mode.value} start={int(fsm.start_control)} emg={int(fsm.emergency_stop)} "
-                    f"deadman={int(snap.deadman)} cmd=({snap.cmd_x:.2f},{snap.cmd_y:.2f},{snap.cmd_yaw:.2f}) "
-                    f"step_time={(end_time - start_time) * 1000.0:.3f} ms"
-                )
+                if fsm is not None:
+                    logger.info(
+                        f"mode={fsm.mode.value} start={int(fsm.start_control)} emg={int(fsm.emergency_stop)} "
+                        f"deadman={int(snap.deadman)} cmd=({snap.cmd_x:.2f},{snap.cmd_y:.2f},{snap.cmd_yaw:.2f}) "
+                        f"step_time={(end_time - start_time) * 1000.0:.3f} ms"
+                    )
+                else:
+                    logger.info(
+                        f"mode=walk(no-fsm) emg={int(emergency_stop)} deadman={int(snap.deadman)} "
+                        f"cmd=({snap.cmd_x:.2f},{snap.cmd_y:.2f},{snap.cmd_yaw:.2f}) "
+                        f"step_time={(end_time - start_time) * 1000.0:.3f} ms"
+                    )
 
             start_time = time.time()
             cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)

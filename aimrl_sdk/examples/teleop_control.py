@@ -305,9 +305,11 @@ class TeleopInput:
 
         # Joystick takes precedence for continuous commands if present.
         if self.joystick_ok:
-            self._cmd_x = self._js.axes[1] * self._max_x
+            # Many gamepads report "push stick forward" as negative; map to +cmd_x (forward).
+            self._cmd_x = -self._js.axes[1] * self._max_x
             self._cmd_y = self._js.axes[0] * self._max_y
-            self._cmd_yaw = self._js.axes[3] * self._max_yaw
+            # Match intuitive turning direction (left stick -> +yaw or vice versa depending on hardware).
+            self._cmd_yaw = -self._js.axes[3] * self._max_yaw
 
         self._apply_cmd_limits()
 
