@@ -5,14 +5,13 @@ import argparse
 import math
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import yaml
 from loguru import logger
 
 import aimrl_sdk
+from rl_deploy_config import AppCfg, component_dim, load_app_cfg
 
 
 def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
@@ -33,150 +32,6 @@ def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
     yaw = math.atan2(siny_cosp, cosy_cosp)
 
     return np.array([roll, pitch, yaw], dtype=np.float32)
-
-
-@dataclass
-class AppCfg:
-    cfg_path: Path
-    model_path: Path
-    control_hz: float
-    sync_hz: float
-    action_scale: float
-    clip_actions: float
-    clip_obs: float
-    observation_size: int
-    num_hist: int
-    cycle_time: float
-    cmd_threshold: float
-    sw_mode: bool
-    default_joint_angles: np.ndarray  # (12,)
-    leg_stiffness: np.ndarray  # (12,)
-    leg_damping: np.ndarray  # (12,)
-    obs_components: list[object]
-
-
-def _resolve_path(base: Path, p: str) -> Path:
-    path = Path(p)
-    return path if path.is_absolute() else (base / path)
-
-
-def _as_floats(x: object, n: int, what: str) -> np.ndarray:
-    if not isinstance(x, list) or len(x) != n:
-        raise ValueError(f"{what} must be a list[{n}]")
-    return np.array([float(v) for v in x], dtype=np.float32)
-
-
-def load_app_cfg(cfg_path: Path, model_override: Path | None = None) -> AppCfg:
-    cfg = yaml.safe_load(cfg_path.read_text())
-    base = cfg_path.parent
-
-    if isinstance(cfg, dict) and "model" in cfg:
-        control = cfg["control"]
-        model = cfg["model"]
-        robot = cfg["robot"]
-        policy = cfg["policy"]
-        phase = cfg["phase"]
-        observation = cfg["observation"]
-
-        model_path = model_override if model_override is not None else _resolve_path(base, str(model["path"]))
-        control_hz = float(control["hz"])
-        sync_hz = float(control.get("sync_hz", control_hz))
-
-        default_joint_angles = _as_floats(robot["leg_default_joint_angles"], 12, "robot.leg_default_joint_angles")
-        leg_stiffness = _as_floats(robot["leg_stiffness"], 12, "robot.leg_stiffness")
-        leg_damping = _as_floats(robot["leg_damping"], 12, "robot.leg_damping")
-
-        observation_size = int(observation["size"])
-        num_hist = int(observation["num_hist"])
-        clip_obs = float(observation["clip"])
-        obs_components = list(observation["components"])
-
-        return AppCfg(
-            cfg_path=cfg_path,
-            model_path=model_path,
-            control_hz=control_hz,
-            sync_hz=sync_hz,
-            action_scale=float(policy["action_scale"]),
-            clip_actions=float(policy["clip_actions"]),
-            clip_obs=clip_obs,
-            observation_size=observation_size,
-            num_hist=num_hist,
-            cycle_time=float(phase["cycle_time"]),
-            cmd_threshold=float(phase["cmd_threshold"]),
-            sw_mode=bool(phase["sw_mode"]),
-            default_joint_angles=default_joint_angles,
-            leg_stiffness=leg_stiffness,
-            leg_damping=leg_damping,
-            obs_components=obs_components,
-        )
-
-    # Backward compatible: deploy-style config.
-    if "LeggedRobotCfg" in cfg:
-        p = cfg["LeggedRobotCfg"]
-    else:
-        p = cfg.get("rl_controllers", {}).get("ros__parameters", {}).get("LeggedRobotCfg")
-        if p is None:
-            raise KeyError("Missing config root (supported: new schema with `model`, or deploy-style `LeggedRobotCfg`)")
-
-    joints = [
-        "idx01_left_hip_roll",
-        "idx02_left_hip_yaw",
-        "idx03_left_hip_pitch",
-        "idx04_left_tarsus",
-        "idx05_left_toe_pitch",
-        "idx06_left_toe_roll",
-        "idx07_right_hip_roll",
-        "idx08_right_hip_yaw",
-        "idx09_right_hip_pitch",
-        "idx10_right_tarsus",
-        "idx11_right_toe_pitch",
-        "idx12_right_toe_roll",
-    ]
-
-    size = p["size"]
-    control_cfg = p["control"]
-    mode = p["mode"]
-    obs_scales = p["normalization"]["obs_scales"]
-    clip = p["normalization"]["clip_scales"]
-
-    default_joint_angle = p["init_state"]["default_joint_angle"]
-    default_joint_angles = np.array([float(default_joint_angle[j]) for j in joints], dtype=np.float32)
-    stiffness = control_cfg["stiffness"]
-    damping = control_cfg["damping"]
-    leg_stiffness = np.array([float(stiffness[j]) for j in joints], dtype=np.float32)
-    leg_damping = np.array([float(damping[j]) for j in joints], dtype=np.float32)
-
-    observation_size = int(size["observations_size"])
-    num_hist = int(size["num_hist"])
-    obs_components = [
-        {"type": "command"},
-        {"type": "leg_pos", "scale": float(obs_scales["dof_pos"])},
-        {"type": "leg_vel", "scale": float(obs_scales["dof_vel"])},
-        {"type": "last_actions"},
-        {"type": "imu_gyro", "scale": float(obs_scales["ang_vel"])},
-        {"type": "imu_euler", "scale": float(obs_scales["quat"])},
-    ]
-
-    bundled_model = Path(__file__).resolve().parent / "policy" / "model.onnx"
-    model_path = model_override if model_override is not None else bundled_model
-    return AppCfg(
-        cfg_path=cfg_path,
-        model_path=model_path,
-        control_hz=100.0,
-        sync_hz=100.0,
-        action_scale=float(control_cfg["action_scale"]),
-        clip_actions=float(clip["clip_actions"]),
-        clip_obs=float(clip["clip_observations"]),
-        observation_size=observation_size,
-        num_hist=num_hist,
-        cycle_time=float(control_cfg["cycle_time"]),
-        cmd_threshold=float(mode["cmd_threshold"]),
-        sw_mode=bool(mode["sw_mode"]),
-        default_joint_angles=default_joint_angles,
-        leg_stiffness=leg_stiffness,
-        leg_damping=leg_damping,
-        obs_components=obs_components,
-    )
 
 
 class OnnxPolicyRunner:
@@ -205,15 +60,9 @@ class OnnxPolicyRunner:
         self._last_actions_slices: list[slice] = []
 
         offset = 0
-        for spec in cfg.obs_components:
-            if isinstance(spec, str):
-                typ = spec
-            elif isinstance(spec, dict):
-                typ = str(spec["type"])
-            else:
-                raise TypeError(f"invalid observation component spec: {spec!r}")
-            dim = self._component_dim(typ)
-            if typ == "last_actions":
+        for comp in cfg.obs_components:
+            dim = component_dim(comp.type)
+            if comp.type == "last_actions":
                 self._last_actions_slices.append(slice(offset, offset + dim))
             offset += dim
         if offset != cfg.observation_size:
@@ -234,29 +83,11 @@ class OnnxPolicyRunner:
         t = time.time() - self.phase_start_time
         self.phase = (t / self.cfg.cycle_time) % 1.0
 
-    @staticmethod
-    def _component_dim(typ: str) -> int:
-        if typ == "command":
-            return 5
-        if typ in ("leg_pos", "leg_vel", "last_actions"):
-            return 12
-        if typ in ("imu_gyro", "imu_euler"):
-            return 3
-        if typ == "imu_quat":
-            return 4
-        raise ValueError(f"unsupported observation component type: {typ}")
-
     def _build_step_observation(self, obs: np.ndarray, cmd_x: float, cmd_y: float, cmd_yaw: float) -> np.ndarray:
         out_parts: list[np.ndarray] = []
-        for spec in self.cfg.obs_components:
-            if isinstance(spec, str):
-                typ = spec
-                scale = 1.0
-            elif isinstance(spec, dict):
-                typ = str(spec["type"])
-                scale = float(spec.get("scale", 1.0))
-            else:
-                raise TypeError(f"invalid observation component spec: {spec!r}")
+        for comp in self.cfg.obs_components:
+            typ = comp.type
+            scale = comp.scale
 
             if typ == "command":
                 out_parts.append(
@@ -293,7 +124,9 @@ class OnnxPolicyRunner:
 
         step_obs = np.concatenate(out_parts, dtype=np.float32)
         if step_obs.shape != (self.cfg.observation_size,):
-            raise RuntimeError(f"unexpected step observation shape {step_obs.shape}, expected {(self.cfg.observation_size,)}")
+            raise RuntimeError(
+                f"unexpected step observation shape {step_obs.shape}, expected {(self.cfg.observation_size,)}"
+            )
         return step_obs
 
     def step(self, obs: np.ndarray, cmd_x: float, cmd_y: float, cmd_yaw: float) -> np.ndarray:
@@ -324,6 +157,11 @@ class OnnxPolicyRunner:
         return actions * self.cfg.action_scale + self.cfg.default_joint_angles
 
 
+def _setup_logger() -> None:
+    logger.remove()
+    logger.add(sys.stderr, format="[{time:YYYY-MM-DD HH:mm:ss.SSS}] [{level}] {message}", level="INFO")
+
+
 def parse_args() -> argparse.Namespace:
     examples_dir = Path(__file__).resolve().parent
     default_cfg = examples_dir / "configs" / "agibot_a2_dof12.yaml"
@@ -341,24 +179,26 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-
-    logger.remove()
-    logger.add(sys.stderr, format="[{time:YYYY-MM-DD HH:mm:ss.SSS}] [{level}] {message}", level="INFO")
+    _setup_logger()
 
     if not args.cfg.exists():
         raise FileNotFoundError(f"cfg not found: {args.cfg}")
 
-    cfg = load_app_cfg(args.cfg, model_override=args.model)
-    if not cfg.model_path.exists():
-        raise FileNotFoundError(f"model not found: {cfg.model_path}")
+    app_cfg = load_app_cfg(args.cfg, model_override=args.model)
+    if not Path(app_cfg.model_path).exists():
+        raise FileNotFoundError(f"model not found: {app_cfg.model_path}")
 
-    control_hz = float(args.control_hz) if args.control_hz is not None else cfg.control_hz
-    sync_hz = float(args.sync_hz) if args.sync_hz is not None else cfg.sync_hz
-    policy = OnnxPolicyRunner(cfg)
+    cmd_x = float(args.cmd_x)
+    cmd_y = float(args.cmd_y)
+    cmd_yaw = float(args.cmd_yaw)
+
+    control_hz = float(args.control_hz) if args.control_hz is not None else app_cfg.control_hz
+    sync_hz = float(args.sync_hz) if args.sync_hz is not None else app_cfg.sync_hz
+    policy = OnnxPolicyRunner(app_cfg)
 
     state, cmd = aimrl_sdk.open(sync_hz=sync_hz)
     logger.info(f"Opened AimRL SDK successfully (sync_hz={sync_hz})")
-    logger.info(f"ONNX policy: {cfg.model_path}")
+    logger.info(f"ONNX policy: {app_cfg.model_path}")
 
     while True:
         logger.info("Waiting for first aligned frame")
@@ -375,16 +215,19 @@ def main() -> None:
         loop_idx = 0
         while True:
             loop_idx += 1
-            stamp_ns, _, obs = state.latest_frame()
+            stamp_ns, aligned, obs = state.latest_frame()
+
+            if not aligned:
+                logger.warning("Latest frame is not aligned")
 
             start_time = time.time()
-            leg_pos_des = policy.step(obs, args.cmd_x, args.cmd_y, args.cmd_yaw).astype(np.float64)
+            leg_pos_des = policy.step(obs, cmd_x, cmd_y, cmd_yaw).astype(np.float64)
             end_time = time.time()
             if loop_idx % log_every == 0:
                 logger.info(f"policy time: {(end_time - start_time) * 1000.0:.3f} ms")
 
             start_time = time.time()
-            cmd.set_leg(position=leg_pos_des, stiffness=cfg.leg_stiffness, damping=cfg.leg_damping)
+            cmd.set_leg(position=leg_pos_des, stiffness=app_cfg.leg_stiffness, damping=app_cfg.leg_damping)
             cmd.set_arm(position=arm_zero, stiffness=0.0, damping=0.0)
             cmd.commit(stamp_ns=stamp_ns)
             end_time = time.time()

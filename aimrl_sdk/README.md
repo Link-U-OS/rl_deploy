@@ -27,7 +27,7 @@ to work directly in motor space.
 
 Observation slices are available via `aimrl_sdk.OBS`, e.g. `obs[aimrl_sdk.OBS.leg_pos]` (auto-derived from the C++ layout).
 
-To run with the included policy + example config (model path + control hz are in the YAML):
+Run with the included policy + example config (model path + control hz are in the YAML):
 
 ```bash
 export PYTHONPATH=$PWD/aimrl_sdk/src
