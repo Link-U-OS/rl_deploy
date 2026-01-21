@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import errno
 import os
 import select
 import sys
@@ -67,24 +68,37 @@ class LinuxJoystick:
                 os.close(self.fd)
             finally:
                 self.fd = None
+        self.axes = [0.0] * len(self.axes)
+        self.buttons = [0] * len(self.buttons)
+        self._last_buttons = self.buttons.copy()
 
-    def poll(self) -> None:
+    def _mark_disconnected(self) -> None:
+        self.close()
+
+    def poll(self) -> bool:
         if self.fd is None:
-            return
+            return False
 
         import struct
 
         while True:
             r, _, _ = select.select([self.fd], [], [], 0.0)
             if not r:
-                return
+                return True
 
             try:
                 data = os.read(self.fd, self._EVENT_SIZE)
+            except OSError as e:
+                # Common when the receiver is unplugged while the program is running.
+                if e.errno in (errno.ENODEV, errno.EIO, errno.EBADF):
+                    self._mark_disconnected()
+                    return False
+                raise
             except BlockingIOError:
-                return
+                return True
             if len(data) != self._EVENT_SIZE:
-                return
+                # Unexpected short read; treat as "no more data" but keep the device.
+                return True
 
             _, value, typ, number = struct.unpack(self._FMT, data)
             typ_no_init = typ & ~self._TYPE_INIT
@@ -222,6 +236,8 @@ class TeleopInput:
 
         self._kb_deadman = False
         self._cmd_x, self._cmd_y, self._cmd_yaw = init_cmd
+        self._last_js_reconnect_t = 0.0
+        self._js_reconnect_period_s = 1.0
 
         # These maxima match joy.yaml scales.
         self._max_x = 2.4
@@ -247,6 +263,17 @@ class TeleopInput:
         else:
             logger.warning("Keyboard not available (stdin is not a TTY)")
 
+    def _maybe_reconnect_joystick(self) -> None:
+        if self.joystick_ok:
+            return
+        now = time.monotonic()
+        if now - self._last_js_reconnect_t < self._js_reconnect_period_s:
+            return
+        self._last_js_reconnect_t = now
+        if self._js.open():
+            self.joystick_ok = True
+            logger.warning(f"Joystick reconnected: {self._js.path}")
+
     def close(self) -> None:
         self._js.close()
         self._kb.close()
@@ -257,8 +284,20 @@ class TeleopInput:
         self._cmd_yaw = float(np.clip(self._cmd_yaw, -self._max_yaw, self._max_yaw))
 
     def poll(self) -> InputSnapshot:
-        self._js.poll()
-        edges = set(self._js.consume_rising_edges())
+        if self.joystick_ok:
+            ok = self._js.poll()
+            if not ok:
+                self.joystick_ok = False
+                # Safety defaults: stop walking command and release deadman.
+                self._kb_deadman = False
+                self._cmd_x = 0.0
+                self._cmd_y = 0.0
+                self._cmd_yaw = 0.0
+                logger.warning("Joystick disconnected; holding mode and zeroing cmd (deadman released)")
+        else:
+            self._maybe_reconnect_joystick()
+
+        edges = set(self._js.consume_rising_edges()) if self.joystick_ok else set()
 
         start_control_edge = 7 in edges
         switch_mode_edge = (0 in edges) and (self._js.buttons[4] == 1)
