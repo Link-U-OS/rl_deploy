@@ -107,6 +107,27 @@ Default behavior (recommended for RL deployment):
 
 Practical tip: treat `(complete and aligned)` as the primary “can I use this frame?” gate. If you enable stats, `statistics()["sync"]` provides counts/breakdowns.
 
+#### Alignment logic (how `aligned/complete/skew_ns` are computed)
+
+The aligned-frame generator runs in a dedicated thread at `sync_hz`. For each tick:
+
+- **Tick time**: choose a target `tick` on a fixed period grid (`period_ns = 1e9 / sync_hz`), then `sleep_until(tick)`.
+- **Sample selection**: for each stream (arm/leg/imu), pick the most recent sample with `sample.stamp <= tick` by scanning backward in the ring buffer, up to `max_backtrack`.
+- **Completeness**:
+  - `complete = arm_ok && leg_ok && imu_ok`
+- **Skew**:
+  - `skew_ns = max(|arm.stamp - tick|, |leg.stamp - tick|, |imu.stamp - tick|)` over the streams that are present
+- **Aligned**:
+  - `aligned = complete && (skew_ns <= max_skew_ms * 1e6)`
+
+Frame contents and timestamping:
+- `frame.stamp_ns` is the **tick** time (not the chosen sample time).
+- When `complete=True`, `obs` is filled from the chosen arm/leg/imu samples (and optionally with the closed-ankle conversion applied).
+- When `complete=False`, `obs` is held from the last complete frame (see above).
+
+Important note about timestamps:
+- The alignment check is based on the message `header.stamp` (or a local fallback if the stamp is missing/invalid), so upstream clock sync and correct stamping strongly affect `aligned`.
+
 `obs` is a 1D `float32` vector with layout defined in C++. Python exposes slices via `aimrl_sdk.OBS`, e.g.:
 - `obs[aimrl_sdk.OBS.leg_pos]`
 - `obs[aimrl_sdk.OBS.leg_vel]`

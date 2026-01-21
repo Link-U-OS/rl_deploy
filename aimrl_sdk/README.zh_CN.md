@@ -108,6 +108,27 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 
 实用建议：用 `(complete and aligned)` 作为主要的“这帧能不能用”门控；启用 statistics 后，可用 `statistics()['sync']` 查看缺失/未对齐的计数与原因拆解。
 
+#### 对齐逻辑（`aligned/complete/skew_ns` 是如何计算的）
+
+对齐帧生成线程以 `sync_hz` 频率运行。每个 tick 的逻辑大致如下：
+
+- **tick 时间**：按固定周期网格选择目标 `tick`（`period_ns = 1e9 / sync_hz`），然后 `sleep_until(tick)`。
+- **样本选择**：对每一路（arm/leg/imu），从 ring buffer 向后扫描，选择满足 `sample.stamp <= tick` 的最新样本（最多回溯 `max_backtrack` 个样本）。
+- **complete（数据齐全）**：
+  - `complete = arm_ok && leg_ok && imu_ok`
+- **skew（时间戳偏差）**：
+  - `skew_ns = max(|arm.stamp - tick|, |leg.stamp - tick|, |imu.stamp - tick|)`（对存在的流取最大值）
+- **aligned（对齐成功）**：
+  - `aligned = complete && (skew_ns <= max_skew_ms * 1e6)`
+
+关于帧内容与时间戳：
+- `frame.stamp_ns` 使用的是 **tick 时间**（不是被选中的样本时间）。
+- 当 `complete=True` 时，`obs` 由选中的 arm/leg/imu 样本填充（并可选应用踝关节闭链转换）。
+- 当 `complete=False` 时，`obs` 会保持为上一帧 complete 的观测（见上一节）。
+
+关于 timestamp 的重要说明：
+- 对齐判断基于消息的 `header.stamp`（若 stamp 缺失/非法则用本地时间做兜底），因此上游时间戳是否正确、以及时钟是否同步，会显著影响 `aligned`。
+
 `obs` 是 `float32` 的 1D 向量，布局在 C++ 中定义，Python 侧用 `aimrl_sdk.OBS` 提供切片：
 - `obs[aimrl_sdk.OBS.leg_pos]`
 - `obs[aimrl_sdk.OBS.leg_vel]`
