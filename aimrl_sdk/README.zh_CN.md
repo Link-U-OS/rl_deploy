@@ -86,11 +86,34 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 - `require_all`: 若为 True，则 arm/leg/imu 任一缺失会标记 invalid
 - `drop_invalid`: 若为 True，则 invalid 帧不会写入对齐帧 ring
 - `use_closed_ankle`: 是否启用踝关节闭链转换（默认 True）
+- `enable_statistics`: 启用低开销运行时统计（默认 False）
+- `statistics_sample_every`: 统计采样 1/N 事件（默认 1）
+- `statistics_ema_shift`: EMA 平滑参数（alpha = 1/2^shift，默认 4）
 
 ### `StateInterface`
 
 - `latest_frame() -> (stamp_ns, valid, obs)`
 - `wait_frame(timeout_s=...) -> (stamp_ns, valid, obs)`：阻塞直到新帧（或超时）
+- `statistics() -> dict`：统计快照（延迟/抖动、publish 耗时、sync 有效性/缺失原因等）
+- `configure_statistics(enabled, sample_every=1, ema_shift=4)`：运行时开关与采样/平滑控制
+- `reset_statistics()`：重置统计计数器
+
+#### 当帧 `valid=False`（或数据缺失）时，最终拿到的数据是什么样？
+
+SDK 在每个 sync tick 生成一帧“对齐帧”。你能否看到 invalid 帧、以及 `obs` 的内容，取决于 `require_all` （默认 True）和 `drop_invalid` （默认 False）：
+
+- `drop_invalid=True`：invalid 帧**不会写入**内部 ring。
+  - `wait_frame()` 只会在有“写入的帧”到来时返回（所以一般看不到 `valid=False`）。
+  - `latest_frame()` 会持续返回**上一帧写入的结果**；当链路当前处于 invalid 时，看起来就像“拿到的是上一帧的数据”（确实如此，同时 `stamp_ns` 也会停在旧值）。
+- `drop_invalid=False`：invalid 帧会以 `valid=False` 写入 ring，`wait_frame()` 也可能返回 invalid 帧。
+
+`obs` 的内容：
+- **skew 导致 invalid**（arm+leg+imu 都齐，但时间戳偏差超过 `max_skew_ms`）：`valid=False`，但 `obs` 仍是**完整填充**的（只是标记为时序对齐失败）。
+- **数据缺失**（tick 时刻任一路缺失）：
+  - `require_all=True`：`valid=False`，`obs` 会被**全零填充**（不是上一帧，也不是“残缺拼起来”的帧）。
+  - `require_all=False`：该帧可能仍会被标记为 `valid=True`（只做 skew 判断），但由于 SDK 只有在 arm+leg+imu 三路都可用时才会填充 `obs`，所以 `obs` 依然是**全零**。如果你期望 `valid=True` 一定代表“数据完整可用”，请保持 `require_all=True`（默认值）。
+
+实用建议：用 `valid` 作为主要的“这帧能不能用”门控；启用 statistics 后，可用 `statistics()['sync']` 查看 invalid/缺失的具体原因统计。
 
 `obs` 是 `float32` 的 1D 向量，布局在 C++ 中定义，Python 侧用 `aimrl_sdk.OBS` 提供切片：
 - `obs[aimrl_sdk.OBS.leg_pos]`
@@ -108,6 +131,116 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 通常建议：
 - `stamp_ns` 传入对应观测帧的时间戳（用于下游同步）
 - 以 `control_hz` 频率循环：读 `latest_frame()` → 计算 → `set_*()` → `commit()`
+
+## 运行时统计（延迟/抖动/性能）
+
+`aimrl_sdk` 支持采集**低开销运行时统计**（默认关闭），重点覆盖：
+- **订阅链路**：arm/leg/imu 的延迟与抖动
+- **发布链路**：arm/leg JointCommand 的 publish 耗时，以及 `commit()` 总耗时
+- **对齐线程（sync_loop）**：每 tick 的性能、overrun、对齐帧 `valid/invalid` 的原因拆解
+- **同步等待（wait_frame）**：ok/timeout/stopped 计数与等待耗时
+
+设计目标：
+- **默认不开**；关闭时尽量减少对主链路影响（热路径不做大部分计时/聚合）。
+- 通过采样（`sample_every`）与 EMA 平滑（`ema_shift`）**可控开销**。
+- 全部统计用 **atomic** 做计数与聚合；`statistics()` 读取不加锁。
+
+### 大致原理
+
+- 每次订阅回调触发时，SDK 记录本地接收时间戳，并与消息 `header.stamp` 对比得到 **delay**（延迟估计）。
+- 同时记录相邻两次接收时间戳差值得到 **interval**，并用 `|interval - EMA(interval)|` 作为 **jitter**（抖动代理）。
+- 每次 `commit()` 记录：
+  - arm/leg 的 publish 调用耗时（只有该侧确实有命令时才计时）
+  - `commit()` 总耗时（包含闭链踝关节转换与两次 publish）
+- sync 线程每 tick 记录：
+  - wake lateness：相对于理想 tick 时间（`tick`）醒来的“迟到量”
+  - compute 时间与 overrun（简单判断：`compute_ns > tick_period_ns`）
+  - 对齐帧 invalid 的原因：`require_all` 缺失 vs `max_skew` 超限，以及具体缺失哪一路
+
+注意：
+- 输出中所有时间相关字段单位都是 **ns**（纳秒）。
+- `delay = recv_time_ns - header_stamp_ns`。如果上游 stamp 用了不同的时钟源/时间不同步，可能会出现 `rx_negative_delay`。
+
+### 启用与配置
+
+可在 open 时启用，也可以运行时切换（`state` 或 `cmd` 都可以操作）：
+
+- open 参数：
+  - `aimrl_sdk.open(..., enable_statistics=True, statistics_sample_every=10, statistics_ema_shift=4)`
+- 运行时：
+  - `state.configure_statistics(True, sample_every=10, ema_shift=4)`
+  - `state.reset_statistics()`
+  - `snap = state.statistics()`
+
+参数含义：
+- `enable_statistics` / `enabled`：总开关。
+- `statistics_sample_every` / `sample_every`：统计采样比率 1/N（1 表示每次都统计）。
+  - `rx_total` 始终是总消息数，但如 `delay_ns.count` 这类 metric 的 `count` 是“被采样到并聚合”的点数。
+- `statistics_ema_shift` / `ema_shift`：EMA 平滑参数（`alpha = 1 / 2^ema_shift`）。
+  - `ema_shift=0` 近似“无平滑”（EMA 更接近 last）。
+
+### 输出数据结构（`statistics() -> dict`）
+
+顶层字段：
+- `enabled`：当前是否启用统计
+- `sample_every`, `ema_shift`：当前配置
+- `now_steady_ns`, `start_steady_ns`, `uptime_ns`：内部 steady clock 时间戳（推荐用 `uptime_ns` 做稳定时间间隔）
+
+通用 metric 字段（如 `delay_ns` / `interval_ns` / `duration_ns` 等）：
+- `count`：采样聚合点数
+- `last_ns`：最后一次采样值
+- `ema_ns`：EMA 平滑值
+- `min_ns`, `max_ns`：采样点上的最小/最大值
+
+#### `arm_state` / `leg_state` / `imu`（订阅侧）
+
+每路字段：
+- `rx_total`：接收消息总数
+- `rx_stamp_missing`：消息头 stamp 缺失/非法（`stamp_ns <= 0`）
+- `rx_negative_delay`：`recv_time_ns - stamp_ns < 0`（时钟不一致或 stamp 异常）
+- `delay_ns`：延迟估计（接收时间 - 消息 stamp）
+- `interval_ns`：相邻两条消息的接收间隔
+- `interval_jitter_ns`：间隔抖动代理（`|interval - EMA(interval)|`）
+
+解释建议：
+- `delay_ns` 只有在上游 stamp 与本地接收时间可比较（同一时钟源/已同步）时，才可视作端到端时延。
+- `interval_jitter_ns` 是简单抖动代理，不是分位数统计。
+
+#### `publish_arm` / `publish_leg` / `commit_total`（发布侧）
+
+- `attempts`：观察到的 commit 次数
+- `skipped_no_cmd`：该侧没有命令（`has_any==false`）而跳过计时/发布的次数
+- `duration_ns`：耗时（采样统计）
+
+#### `sync`（对齐帧生成线程）
+
+- `tick_total`：tick 总数
+- `tick_overrun`：compute 超过 tick 周期的次数（粗略 overrun）
+- `wake_lateness_ns`：醒来迟到量（采样）
+- `compute_ns`：每 tick 计算耗时（采样）
+- `missing_arm` / `missing_leg` / `missing_imu`：每 tick 缺失各路样本的次数
+- `frame_written`：写入 frame ring 的帧数
+- `frame_dropped_invalid`：由于 `drop_invalid=True` 被丢弃的 invalid 帧数
+- `frame_valid`：`valid=True` 帧数
+- `frame_invalid_require_all_missing`：`require_all=True` 且有一路缺失导致 invalid
+- `frame_invalid_missing_arm/leg/imu`：具体哪一路导致 require_all invalid
+- `frame_invalid_skew`：skew 超过阈值导致 invalid 的帧数
+
+#### `wait_frame`（同步订阅等待）
+
+- `calls`：调用次数
+- `ok` / `timeout` / `stopped`：结果计数
+- `wait_ns`：等待耗时（仅对 ok 的采样统计）
+
+### 示例：打印关键信息
+
+```python
+st, cmd = aimrl_sdk.open(sync_hz=100.0, enable_statistics=True, statistics_sample_every=10)
+snap = st.statistics()
+print("arm delay ema(ms) =", snap["arm_state"]["delay_ns"]["ema_ns"] / 1e6)
+print("commit ema(ms)    =", snap["commit_total"]["duration_ns"]["ema_ns"] / 1e6)
+print("sync invalid skew =", snap["sync"]["frame_invalid_skew"])
+```
 
 ## 配置文件（example schema）与参数含义
 

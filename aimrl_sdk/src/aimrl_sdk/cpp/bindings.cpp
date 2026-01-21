@@ -142,6 +142,85 @@ std::vector<std::string> default_leg_names() {
       "idx12_01_right_toe_motorB"};
 }
 
+py::dict metric_to_dict(const StatsMetricSnapshot &m) {
+  py::dict d;
+  d["count"] = py::int_(m.count);
+  d["last_ns"] = py::int_(m.last);
+  d["ema_ns"] = py::int_(m.ema);
+  d["min_ns"] = py::int_(m.min);
+  d["max_ns"] = py::int_(m.max);
+  return d;
+}
+
+py::dict stream_to_dict(const StreamStatsSnapshot &s) {
+  py::dict d;
+  d["rx_total"] = py::int_(s.rx_total);
+  d["rx_stamp_missing"] = py::int_(s.rx_stamp_missing);
+  d["rx_negative_delay"] = py::int_(s.rx_negative_delay);
+  d["delay_ns"] = metric_to_dict(s.delay_ns);
+  d["interval_ns"] = metric_to_dict(s.interval_ns);
+  d["interval_jitter_ns"] = metric_to_dict(s.interval_jitter_ns);
+  return d;
+}
+
+py::dict publish_to_dict(const PublishStatsSnapshot &p) {
+  py::dict d;
+  d["attempts"] = py::int_(p.attempts);
+  d["skipped_no_cmd"] = py::int_(p.skipped_no_cmd);
+  d["duration_ns"] = metric_to_dict(p.duration_ns);
+  return d;
+}
+
+py::dict sync_to_dict(const SyncStatsSnapshot &s) {
+  py::dict d;
+  d["tick_total"] = py::int_(s.tick_total);
+  d["tick_overrun"] = py::int_(s.tick_overrun);
+  d["wake_lateness_ns"] = metric_to_dict(s.wake_lateness_ns);
+  d["compute_ns"] = metric_to_dict(s.compute_ns);
+  d["missing_arm"] = py::int_(s.missing_arm);
+  d["missing_leg"] = py::int_(s.missing_leg);
+  d["missing_imu"] = py::int_(s.missing_imu);
+  d["frame_written"] = py::int_(s.frame_written);
+  d["frame_dropped_invalid"] = py::int_(s.frame_dropped_invalid);
+  d["frame_valid"] = py::int_(s.frame_valid);
+  d["frame_invalid_require_all_missing"] =
+      py::int_(s.frame_invalid_require_all_missing);
+  d["frame_invalid_missing_arm"] = py::int_(s.frame_invalid_missing_arm);
+  d["frame_invalid_missing_leg"] = py::int_(s.frame_invalid_missing_leg);
+  d["frame_invalid_missing_imu"] = py::int_(s.frame_invalid_missing_imu);
+  d["frame_invalid_skew"] = py::int_(s.frame_invalid_skew);
+  return d;
+}
+
+py::dict wait_frame_to_dict(const WaitFrameStatsSnapshot &w) {
+  py::dict d;
+  d["calls"] = py::int_(w.calls);
+  d["ok"] = py::int_(w.ok);
+  d["timeout"] = py::int_(w.timeout);
+  d["stopped"] = py::int_(w.stopped);
+  d["wait_ns"] = metric_to_dict(w.wait_ns);
+  return d;
+}
+
+py::dict statistics_to_dict(const StatisticsSnapshot &s) {
+  py::dict d;
+  d["enabled"] = py::bool_(s.enabled);
+  d["sample_every"] = py::int_(s.sample_every);
+  d["ema_shift"] = py::int_(s.ema_shift);
+  d["now_steady_ns"] = py::int_(s.now_steady_ns);
+  d["start_steady_ns"] = py::int_(s.start_steady_ns);
+  d["uptime_ns"] = py::int_(s.now_steady_ns - s.start_steady_ns);
+  d["arm_state"] = stream_to_dict(s.arm_state);
+  d["leg_state"] = stream_to_dict(s.leg_state);
+  d["imu"] = stream_to_dict(s.imu);
+  d["publish_arm"] = publish_to_dict(s.publish_arm);
+  d["publish_leg"] = publish_to_dict(s.publish_leg);
+  d["commit_total"] = publish_to_dict(s.commit_total);
+  d["sync"] = sync_to_dict(s.sync);
+  d["wait_frame"] = wait_frame_to_dict(s.wait_frame);
+  return d;
+}
+
 }  // namespace
 
 struct PyState {
@@ -190,18 +269,33 @@ PYBIND11_MODULE(_bindings, m) {
             const auto after = self.core->frame_seq();
             py::gil_scoped_release release;
 
-            auto f =
-                self.core->wait_next_frame(after, parse_timeout(timeout_s));
-            if (!f)
-              throw std::runtime_error("wait_frame timeout or stopped");
+            auto r = self.core->wait_next_frame_ex(after, parse_timeout(timeout_s));
+            if (!r.frame) {
+              if (r.status == WaitFrameStatus::Timeout)
+                throw std::runtime_error("wait_frame timeout");
+              throw std::runtime_error("wait_frame stopped");
+            }
 
             py::gil_scoped_acquire acquire;
             py::array_t<float> x(kFrameDim);
-            std::memcpy(x.mutable_data(), f->x.data(),
+            std::memcpy(x.mutable_data(), r.frame->x.data(),
                         sizeof(float) * kFrameDim);
-            return py::make_tuple(f->stamp.value, f->valid, x);
+            return py::make_tuple(r.frame->stamp.value, r.frame->valid, x);
           },
           py::arg("timeout_s") = py::none())
+      .def("statistics",
+           [](PyState &self) { return statistics_to_dict(self.core->statistics_snapshot()); })
+      .def("reset_statistics", [](PyState &self) { self.core->reset_statistics(); })
+      .def(
+          "configure_statistics",
+          [](PyState &self, bool enabled, std::uint32_t sample_every, int ema_shift) {
+            self.core->set_statistics_config(
+                Statistics::Config{.enabled = enabled,
+                                   .sample_every = sample_every,
+                                   .ema_shift = ema_shift});
+          },
+          py::arg("enabled"), py::arg("sample_every") = 1,
+          py::arg("ema_shift") = 4)
       .def("read_frames", [](PyState &self, int n) {
         auto frames = self.core->read_last_frames(n);
 
@@ -224,6 +318,19 @@ PYBIND11_MODULE(_bindings, m) {
       });
 
   py::class_<PyCmd>(m, "CommandInterface")
+      .def("statistics",
+           [](PyCmd &self) { return statistics_to_dict(self.core->statistics_snapshot()); })
+      .def("reset_statistics", [](PyCmd &self) { self.core->reset_statistics(); })
+      .def(
+          "configure_statistics",
+          [](PyCmd &self, bool enabled, std::uint32_t sample_every, int ema_shift) {
+            self.core->set_statistics_config(
+                Statistics::Config{.enabled = enabled,
+                                   .sample_every = sample_every,
+                                   .ema_shift = ema_shift});
+          },
+          py::arg("enabled"), py::arg("sample_every") = 1,
+          py::arg("ema_shift") = 4)
       .def(
           "set_arm",
           [](PyCmd &self, const py::object &pos, const py::object &vel, const py::object &eff,
@@ -302,7 +409,8 @@ PYBIND11_MODULE(_bindings, m) {
          int ankle_pitch_direction, int ankle_roll_direction, double ankle_d,
          double ankle_l, double ankle_h1, double ankle_h2,
          double ankle_actuator_pos_limit, double ankle_pitch_limit,
-         double ankle_roll_limit) {
+         double ankle_roll_limit, bool enable_statistics,
+         std::uint32_t statistics_sample_every, int statistics_ema_shift) {
         Core::Options opt;
         opt.raw_ring = raw_ring;
         opt.frame_ring = frame_ring;
@@ -343,6 +451,10 @@ PYBIND11_MODULE(_bindings, m) {
         if (!leg_names.is_none())
           opt.leg_names = py::cast<std::vector<std::string>>(leg_names);
 
+        opt.statistics.enabled = enable_statistics;
+        opt.statistics.sample_every = statistics_sample_every;
+        opt.statistics.ema_shift = statistics_ema_shift;
+
         const auto cfg = resolve_config_path(config_path);
         auto core = std::make_shared<Core>(
             opt, std::make_unique<aimrl_sdk::AimrtTransport>(cfg));
@@ -373,6 +485,9 @@ Open the AimRL SDK and return `(state, cmd)`.
   ankle_torque_control: If True and `use_closed_ankle`, ankle motors are
     commanded in effort (torque) based on (pitch,roll) PD in `commit()`.
   ankle_*: Closed-chain ankle geometry/sign parameters (advanced).
+  enable_statistics: Enable lightweight runtime statistics counters/latency/jitter.
+  statistics_sample_every: Sample 1/N events when aggregating statistics.
+  statistics_ema_shift: EMA smoothing shift (alpha = 1/2^shift).
 )pbdoc",
       py::arg("config_path") = py::none(), py::arg("sync_hz") = 100.0,
       py::arg("max_skew_ms") = 3.0, py::arg("max_backtrack") = 200,
@@ -386,7 +501,10 @@ Open the AimRL SDK and return `(state, cmd)`.
       py::arg("ankle_roll_direction") = 1, py::arg("ankle_d") = 0.0315,
       py::arg("ankle_l") = 0.063, py::arg("ankle_h1") = 0.239,
       py::arg("ankle_h2") = 0.145, py::arg("ankle_actuator_pos_limit") = 1.0,
-      py::arg("ankle_pitch_limit") = 1.0, py::arg("ankle_roll_limit") = 0.5);
+      py::arg("ankle_pitch_limit") = 1.0, py::arg("ankle_roll_limit") = 0.5,
+      py::arg("enable_statistics") = false,
+      py::arg("statistics_sample_every") = 1,
+      py::arg("statistics_ema_shift") = 4);
 
   m.def("close", [](const py::object &handle) {
     std::shared_ptr<Core> core;

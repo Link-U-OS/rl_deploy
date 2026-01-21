@@ -85,11 +85,34 @@ Common parameters:
 - `require_all`: if True, frame becomes invalid if any of arm/leg/imu is missing
 - `drop_invalid`: if True, invalid frames are not written to the aligned-frame ring
 - `use_closed_ankle`: enable the ankle closed-chain conversion (default True)
+- `enable_statistics`: enable low-overhead runtime statistics (default False)
+- `statistics_sample_every`: sample 1/N events for stats aggregation (default 1)
+- `statistics_ema_shift`: EMA smoothing shift (alpha = 1/2^shift, default 4)
 
 ### `StateInterface`
 
 - `latest_frame() -> (stamp_ns, valid, obs)`
 - `wait_frame(timeout_s=...) -> (stamp_ns, valid, obs)`: block until a new frame arrives (or timeout)
+- `statistics() -> dict`: snapshot counters/latency/jitter/publish cost/sync validity breakdown
+- `configure_statistics(enabled, sample_every=1, ema_shift=4)`: runtime toggle + sampling/smoothing
+- `reset_statistics()`: reset all statistics counters
+
+#### What happens when a frame is `valid=False` (or data is missing)
+
+The SDK produces an aligned frame on each sync tick. Whether you see invalid frames, and what `obs` contains, depends on `require_all` (default True) and `drop_invalid` (default False):
+
+- `drop_invalid=True`: invalid frames are **not written** to the internal ring.
+  - `wait_frame()` will only return when a **written** frame arrives (so you usually won’t observe `valid=False`).
+  - `latest_frame()` keeps returning the **last written** frame. If the stream is currently invalid, this can look like “previous frame” (it is, and the `stamp_ns` will also be older).
+- `drop_invalid=False`: invalid frames are written with `valid=False`, and `wait_frame()` can return them like any other frame.
+
+What `obs` looks like:
+- **Skew invalid** (all arm+leg+imu are present, but skew exceeds `max_skew_ms`): `valid=False` and `obs` is still **fully populated** (but marked invalid due to timing misalignment).
+- **Missing data** (any stream missing at that tick):
+  - with `require_all=True`: `valid=False` and `obs` is **zero-filled** (not “previous frame”, not a partial frame).
+  - with `require_all=False`: the frame may still be marked `valid=True` (skew-only check), but `obs` is still **zero-filled** because the SDK only fills `obs` when arm+leg+imu are all available. If you need complete data, keep `require_all=True` (default).
+
+Practical tip: treat `valid` as the primary “can I use this frame?” gate. If you enable stats, `statistics()["sync"]` can tell you *why* frames were invalid/missing.
 
 `obs` is a 1D `float32` vector with layout defined in C++. Python exposes slices via `aimrl_sdk.OBS`, e.g.:
 - `obs[aimrl_sdk.OBS.leg_pos]`
@@ -106,6 +129,114 @@ Common parameters:
 Typical usage:
 - pass `stamp_ns` from the corresponding observation frame (for downstream synchronization)
 - run at `control_hz`: read `latest_frame()` → compute → `set_*()` → `commit()`
+
+## Runtime Statistics (Latency/Jitter/Performance)
+
+`aimrl_sdk` can collect **low-overhead runtime statistics** for the messaging pipeline, focused on:
+- **Subscribe path**: message delay and jitter (arm/leg/imu)
+- **Publish path**: publish cost for arm/leg JointCommand and total `commit()` time
+- **Sync loop**: per-tick timing + aligned-frame validity breakdown (skew vs missing data)
+- **Sync wait**: `wait_frame()` outcome (ok/timeout/stopped) and wait time
+
+Design goals:
+- **Off by default**; when disabled, hot paths avoid most timing work.
+- **Configurable overhead** via sampling (`sample_every`) and EMA smoothing (`ema_shift`).
+- **Thread-safe counters**: all metrics use atomics; reading `statistics()` is lock-free.
+
+### How it works (high level)
+
+- On every subscribed message callback, the SDK captures a local receive timestamp and compares it to the message `header.stamp` to estimate **delay**.
+- It also tracks consecutive receive timestamps to estimate **interval** and **jitter**.
+- On `commit()`, it measures publish duration for arm/leg (when those commands are present) and total `commit()` time.
+- In the sync thread, it measures:
+  - wake lateness (how late the thread wakes up relative to the ideal tick time)
+  - compute time per tick, and a simple overrun indicator (`compute_ns > tick_period_ns`)
+  - aligned-frame validity causes: missing data (require_all) vs skew threshold
+
+Notes/assumptions:
+- All time metrics are in **nanoseconds** (`*_ns`) in the output.
+- Delay is computed as `recv_time_ns - msg_header_stamp_ns`. If upstream stamping uses a different clock source, you may see `rx_negative_delay`.
+
+### Enabling / configuring
+
+You can enable statistics either when opening the SDK, or at runtime:
+
+- At open:
+  - `aimrl_sdk.open(..., enable_statistics=True, statistics_sample_every=10, statistics_ema_shift=4)`
+- At runtime (on either `state` or `cmd`):
+  - `state.configure_statistics(True, sample_every=10, ema_shift=4)`
+  - `state.reset_statistics()`
+  - `snap = state.statistics()`
+
+Parameters:
+- `enable_statistics` / `enabled`: master switch.
+- `statistics_sample_every` / `sample_every`: aggregate 1/N events (1 means “every event”).
+  - `rx_total` is still the total event count, but metric fields like `delay_ns.count` reflect the number of **sampled** points.
+- `statistics_ema_shift` / `ema_shift`: EMA smoothing shift (`alpha = 1 / 2^ema_shift`).
+  - `ema_shift=0` approximates “no smoothing” (EMA follows last sample).
+
+### Output schema (`statistics() -> dict`)
+
+Top-level fields:
+- `enabled`: whether statistics collection is enabled
+- `sample_every`, `ema_shift`: current config
+- `now_steady_ns`, `start_steady_ns`, `uptime_ns`: internal steady-clock timestamps (use `uptime_ns` for a stable interval)
+
+Common metric dict format (used by `delay_ns`, `interval_ns`, `duration_ns`, etc.):
+- `count`: number of sampled points aggregated
+- `last_ns`: last sampled value
+- `ema_ns`: exponentially smoothed value
+- `min_ns`, `max_ns`: min/max over sampled points
+
+#### `arm_state` / `leg_state` / `imu` (subscribe-side)
+
+Per-stream fields:
+- `rx_total`: total number of received messages
+- `rx_stamp_missing`: header stamp missing/invalid (`stamp_ns <= 0`)
+- `rx_negative_delay`: `recv_time_ns - stamp_ns < 0` (clock mismatch or bad stamp)
+- `delay_ns`: delay between receive time and message timestamp
+- `interval_ns`: time between consecutive received messages (receive timestamp delta)
+- `interval_jitter_ns`: absolute deviation of `interval_ns` from its EMA (`|interval - ema(interval)|`)
+
+Interpretation:
+- `delay_ns` reflects end-to-end latency **only if** the publisher stamp represents “publish time” on a clock comparable to local receive time.
+- `interval_jitter_ns` is a simple jitter proxy; it is not a full distribution/percentile.
+
+#### `publish_arm` / `publish_leg` / `commit_total` (publish-side)
+
+- `attempts`: number of times `commit()` observed this publish category
+- `skipped_no_cmd`: how many times no command was present (e.g., `has_any == false`)
+- `duration_ns`: measured duration (sampled) of the publish call / total commit
+
+#### `sync` (aligned-frame generator thread)
+
+- `tick_total`: total sync ticks executed
+- `tick_overrun`: ticks whose compute time exceeded tick period (approximate “overrun”)
+- `wake_lateness_ns`: lateness relative to ideal tick time (sampled)
+- `compute_ns`: compute duration per tick (sampled)
+- `missing_arm` / `missing_leg` / `missing_imu`: how often each stream was missing a usable sample at tick time
+- `frame_written`: frames written to the ring
+- `frame_dropped_invalid`: invalid frames dropped due to `drop_invalid=True`
+- `frame_valid`: frames with `valid=True`
+- `frame_invalid_require_all_missing`: frames invalid because `require_all=True` and at least one stream was missing
+- `frame_invalid_missing_arm` / `frame_invalid_missing_leg` / `frame_invalid_missing_imu`: which stream(s) caused require_all invalidation
+- `frame_invalid_skew`: frames invalid because timestamp skew exceeded `max_skew_ns`
+
+#### `wait_frame` (sync subscription / blocking wait)
+
+- `calls`: number of `wait_frame()` calls
+- `ok` / `timeout` / `stopped`: outcome counters
+- `wait_ns`: time spent waiting (sampled for `ok` calls)
+
+### Example: logging a compact snapshot
+
+```python
+st, cmd = aimrl_sdk.open(sync_hz=100.0, enable_statistics=True, statistics_sample_every=10)
+snap = st.statistics()
+print("arm delay ema(ms) =", snap["arm_state"]["delay_ns"]["ema_ns"] / 1e6)
+print("commit ema(ms)    =", snap["commit_total"]["duration_ns"]["ema_ns"] / 1e6)
+print("sync invalid skew =", snap["sync"]["frame_invalid_skew"])
+```
 
 ## Example Config Schema & Parameter Meanings
 

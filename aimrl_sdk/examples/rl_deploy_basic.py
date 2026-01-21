@@ -181,6 +181,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable motion FSM; start directly in WALK (policy) mode and only gate motion by deadman",
     )
+    p.add_argument("--enable-statistics", action="store_true", help="Enable aimrl_sdk runtime statistics (default off)")
+    p.add_argument(
+        "--statistics-sample-every",
+        type=int,
+        default=1,
+        help="Statistics sampling: aggregate 1/N events (default: 1)",
+    )
+    p.add_argument(
+        "--statistics-ema-shift",
+        type=int,
+        default=4,
+        help="Statistics EMA shift (alpha=1/2^shift, default: 4)",
+    )
+    p.add_argument(
+        "--statistics-log-every-s",
+        type=float,
+        default=0.0,
+        help="Log statistics snapshot every N seconds (0 disables, default: 0)",
+    )
     return p.parse_args()
 
 
@@ -203,9 +222,19 @@ def main() -> None:
     sync_hz = float(args.sync_hz) if args.sync_hz is not None else app_cfg.sync_hz
     policy = OnnxPolicyRunner(app_cfg)
 
-    state, cmd = aimrl_sdk.open(sync_hz=sync_hz)
+    state, cmd = aimrl_sdk.open(
+        sync_hz=sync_hz,
+        enable_statistics=bool(args.enable_statistics),
+        statistics_sample_every=int(args.statistics_sample_every),
+        statistics_ema_shift=int(args.statistics_ema_shift),
+    )
     logger.info(f"Opened AimRL SDK successfully (sync_hz={sync_hz})")
     logger.info(f"ONNX policy: {app_cfg.model_path}")
+    if args.enable_statistics:
+        logger.info(
+            "Statistics enabled "
+            f"(sample_every={int(args.statistics_sample_every)}, ema_shift={int(args.statistics_ema_shift)})"
+        )
 
     while True:
         logger.info("Waiting for first aligned frame")
@@ -220,6 +249,7 @@ def main() -> None:
     teleop = TeleopInput(args.joystick, init_cmd=(cmd_x, cmd_y, cmd_yaw))
     fsm = MotionFSM(app_cfg) if not args.no_fsm else None
     emergency_stop = False
+    stats_next_log_t = time.monotonic() + max(0.0, float(args.statistics_log_every_s))
 
     try:
         loop_idx = 0
@@ -252,7 +282,7 @@ def main() -> None:
                     emergency_stop = False
                     logger.warning("Emergency stop cleared (no-fsm mode)")
 
-            start_time = time.time()
+            start_time = time.perf_counter()
             if fsm is not None:
                 leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
             else:
@@ -264,7 +294,7 @@ def main() -> None:
                     leg_pos_des = policy.step(obs, snap.cmd_x, snap.cmd_y, snap.cmd_yaw).astype(np.float64, copy=False)
                     leg_stiffness = np.array(app_cfg.leg_stiffness, dtype=np.float64)
                     leg_damping = np.array(app_cfg.leg_damping, dtype=np.float64)
-            end_time = time.time()
+            end_time = time.perf_counter()
             if loop_idx % log_every == 0:
                 if fsm is not None:
                     logger.info(
@@ -279,18 +309,87 @@ def main() -> None:
                         f"step_time={(end_time - start_time) * 1000.0:.3f} ms"
                     )
 
-            start_time = time.time()
+            # start_time = time.perf_counter()
             cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)
             cmd.set_arm(position=arm_zero, stiffness=0.0, damping=0.0)
             cmd.commit(stamp_ns=stamp_ns)
-            end_time = time.time()
-            if loop_idx % log_every == 0:
-                logger.info(f"commit time: {(end_time - start_time) * 1000.0:.3f} ms")
+            # end_time = time.perf_counter()
+            # if loop_idx % log_every == 0:
+            #     logger.info(f"commit time: {(end_time - start_time) * 1000.0:.3f} ms")
 
+            if args.enable_statistics and args.statistics_log_every_s > 0.0:
+                now = time.monotonic()
+                if now >= stats_next_log_t:
+                    stats_next_log_t = now + float(args.statistics_log_every_s)
+                    s = state.statistics()
+
+                    def _metric_ms(metric: dict) -> str:
+                        count = int(metric.get("count", 0))
+                        if count <= 0:
+                            return "n/a"
+                        last_ms = float(metric.get("last_ns", 0)) / 1e6
+                        ema_ms = float(metric.get("ema_ns", 0)) / 1e6
+                        min_ms = float(metric.get("min_ns", 0)) / 1e6
+                        max_ms = float(metric.get("max_ns", 0)) / 1e6
+                        return f"ema {ema_ms:7.3f} (min {min_ms:7.3f} max {max_ms:7.3f} last {last_ms:7.3f}, n={count})"
+
+                    def _hz_from_interval(interval_metric: dict) -> str:
+                        ema_ns = float(interval_metric.get("ema_ns", 0))
+                        if ema_ns <= 0:
+                            return "n/a"
+                        hz = 1e9 / ema_ns
+                        return f"{hz:6.1f}"
+
+                    arm_state = s.get("arm_state", {})
+                    leg_state = s.get("leg_state", {})
+                    imu_state = s.get("imu", {})
+
+                    arm_delay = _metric_ms(arm_state.get("delay_ns", {}))
+                    leg_delay = _metric_ms(leg_state.get("delay_ns", {}))
+                    imu_delay = _metric_ms(imu_state.get("delay_ns", {}))
+
+                    arm_jitter = _metric_ms(arm_state.get("interval_jitter_ns", {}))
+                    leg_jitter = _metric_ms(leg_state.get("interval_jitter_ns", {}))
+                    imu_jitter = _metric_ms(imu_state.get("interval_jitter_ns", {}))
+
+                    arm_hz = _hz_from_interval(arm_state.get("interval_ns", {}))
+                    leg_hz = _hz_from_interval(leg_state.get("interval_ns", {}))
+                    imu_hz = _hz_from_interval(imu_state.get("interval_ns", {}))
+
+                    pub_arm = _metric_ms(s.get("publish_arm", {}).get("duration_ns", {}))
+                    pub_leg = _metric_ms(s.get("publish_leg", {}).get("duration_ns", {}))
+                    commit_total = _metric_ms(s.get("commit_total", {}).get("duration_ns", {}))
+
+                    sync = s.get("sync", {})
+                    wait_frame = s.get("wait_frame", {})
+                    uptime_s = float(s.get("uptime_ns", 0)) / 1e9
+
+                    logger.info(
+                        f"statistics (uptime={uptime_s:.1f}s, sample_every={int(s.get('sample_every', 1))}, ema_shift={int(s.get('ema_shift', 4))}):\n"
+                        f"  RX rate (Hz):   arm={arm_hz}  leg={leg_hz}  imu={imu_hz}\n"
+                        f"  RX delay (ms):  arm={arm_delay} \n"
+                        f"                  leg={leg_delay} \n"
+                        f"                  imu={imu_delay} \n"
+                        f"  RX jitter(ms):  arm={arm_jitter} \n"
+                        f"                  leg={leg_jitter} \n"
+                        f"                  imu={imu_jitter} \n"
+                        f"  TX cost  (ms):  commit={commit_total} \n"
+                        f"                  pub_arm={pub_arm} \n"
+                        f"                  pub_leg={pub_leg} \n"
+                        f"  SYNC:\n"
+                        f"    ticks         : {int(sync.get('tick_total', 0)):,}   (overrun: {int(sync.get('tick_overrun', 0)):,})\n"
+                        f"    frames:\n"
+                        f"      written     : {int(sync.get('frame_written', 0)):,}\n"
+                        f"      dropped_inv : {int(sync.get('frame_dropped_invalid', 0)):,}\n"
+                        f"      valid       : {int(sync.get('frame_valid', 0)):,}\n"
+                        f"      invalid     : {int(sync.get('frame_written', 0)) - int(sync.get('frame_valid', 0)):,} (require_all_missing: {int(sync.get('frame_invalid_require_all_missing', 0)):,}, skew: {int(sync.get('frame_invalid_skew', 0)):,})\n"
+                        f"        missing   : arm {int(sync.get('frame_invalid_missing_arm', 0)):,} | leg {int(sync.get('frame_invalid_missing_leg', 0)):,} | imu {int(sync.get('frame_invalid_missing_imu', 0)):,}\n"
+                        f"    wait_frame    : ok {int(wait_frame.get('ok', 0)):,} | timeout {int(wait_frame.get('timeout', 0)):,} | stopped {int(wait_frame.get('stopped', 0)):,}",
+                    )
             time.sleep(dt)
 
     except KeyboardInterrupt:
-        pass
+        logger.info("Keyboard interrupt")
     finally:
         teleop.close()
         aimrl_sdk.close(state)

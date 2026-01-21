@@ -19,6 +19,12 @@ static TimestampNs now_system_ns() {
   return TimestampNs{ns};
 }
 
+static std::int64_t now_steady_ns() {
+  using namespace std::chrono;
+  return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
+
 Core::Core(Options opt, std::unique_ptr<Transport> transport)
     : opt_(std::move(opt)), transport_(std::move(transport)), arm_raw_(opt_.raw_ring), leg_raw_(opt_.raw_ring), imu_raw_(opt_.raw_ring), frame_ring_(opt_.frame_ring) {
   if (!transport_)
@@ -40,6 +46,9 @@ Core::Core(Options opt, std::unique_ptr<Transport> transport)
     throw std::invalid_argument(
         "sync.frame_hz out of range (computed period_ns invalid)");
   }
+
+  stats_.set_config(opt_.statistics);
+  stats_.reset(now_steady_ns());
 }
 
 Core::~Core() { stop(); }
@@ -75,10 +84,13 @@ void Core::stop() {
 
 void Core::on_arm_state(const std::shared_ptr<const joint_msgs::msg::JointState> &msg) {
   JointSample<kArmDof> arm{};
+  const auto stats_enabled = stats_.enabled();
+  const auto recv_time_ns = stats_enabled ? now_system_ns() : TimestampNs{};
   const auto arm_stamp =
       static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
       static_cast<std::int64_t>(msg->header.stamp.nanosec);
-  arm.stamp = (arm_stamp > 0) ? TimestampNs{arm_stamp} : now_system_ns();
+  arm.stamp = (arm_stamp > 0) ? TimestampNs{arm_stamp}
+                              : (stats_enabled ? recv_time_ns : now_system_ns());
   for (int i = 0; i < kArmDof; ++i) {
     arm.pos[i] = msg->joints[i].position;
     arm.vel[i] = msg->joints[i].velocity;
@@ -87,14 +99,20 @@ void Core::on_arm_state(const std::shared_ptr<const joint_msgs::msg::JointState>
     arm.header_seq = Sequence32{static_cast<std::uint32_t>(msg->header.stamp.nanosec)};
   }
   arm_raw_.write([&](auto &dst) { dst = arm; });
+  if (stats_enabled) {
+    stats_.on_arm_state(recv_time_ns.value, arm_stamp);
+  }
 }
 
 void Core::on_leg_state(const std::shared_ptr<const joint_msgs::msg::JointState> &msg) {
   JointSample<kLegDof> leg{};
+  const auto stats_enabled = stats_.enabled();
+  const auto recv_time_ns = stats_enabled ? now_system_ns() : TimestampNs{};
   const auto leg_stamp =
       static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
       static_cast<std::int64_t>(msg->header.stamp.nanosec);
-  leg.stamp = (leg_stamp > 0) ? TimestampNs{leg_stamp} : now_system_ns();
+  leg.stamp = (leg_stamp > 0) ? TimestampNs{leg_stamp}
+                              : (stats_enabled ? recv_time_ns : now_system_ns());
   for (int i = 0; i < kLegDof; ++i) {
     leg.pos[i] = msg->joints[i].position;
     leg.vel[i] = msg->joints[i].velocity;
@@ -103,14 +121,20 @@ void Core::on_leg_state(const std::shared_ptr<const joint_msgs::msg::JointState>
     leg.header_seq = Sequence32{static_cast<std::uint32_t>(msg->header.stamp.nanosec)};
   }
   leg_raw_.write([&](auto &dst) { dst = leg; });
+  if (stats_enabled) {
+    stats_.on_leg_state(recv_time_ns.value, leg_stamp);
+  }
 }
 
 void Core::on_imu(const std::shared_ptr<const sensor_msgs::msg::Imu> &msg) {
   ImuSample imu{};
+  const auto stats_enabled = stats_.enabled();
+  const auto recv_time_ns = stats_enabled ? now_system_ns() : TimestampNs{};
   const auto imu_stamp =
       static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
       static_cast<std::int64_t>(msg->header.stamp.nanosec);
-  imu.stamp = (imu_stamp > 0) ? TimestampNs{imu_stamp} : now_system_ns();
+  imu.stamp = (imu_stamp > 0) ? TimestampNs{imu_stamp}
+                              : (stats_enabled ? recv_time_ns : now_system_ns());
   imu.quat_xyzw[0] = msg->orientation.x;
   imu.quat_xyzw[1] = msg->orientation.y;
   imu.quat_xyzw[2] = msg->orientation.z;
@@ -122,6 +146,9 @@ void Core::on_imu(const std::shared_ptr<const sensor_msgs::msg::Imu> &msg) {
   imu.acc[1] = msg->linear_acceleration.y;
   imu.acc[2] = msg->linear_acceleration.z;
   imu_raw_.write([&](auto &dst) { dst = imu; });
+  if (stats_enabled) {
+    stats_.on_imu(recv_time_ns.value, imu_stamp);
+  }
 }
 
 std::optional<Frame> Core::latest_frame() const {
@@ -136,22 +163,48 @@ std::optional<Frame> Core::latest_frame() const {
 
 std::optional<Frame> Core::wait_next_frame(std::uint64_t after_seq,
                                            std::optional<double> timeout_s) {
+  auto res = wait_next_frame_ex(after_seq, timeout_s);
+  return res.frame;
+}
+
+Core::WaitNextFrameResult Core::wait_next_frame_ex(
+    std::uint64_t after_seq, std::optional<double> timeout_s) {
+  const auto stats_enabled = stats_.enabled();
+  const auto t0 = stats_enabled ? now_steady_ns() : 0;
+
   std::unique_lock lk(frame_mtx_);
   auto pred = [&] {
     return frame_seq_.load(std::memory_order_relaxed) > after_seq || !running();
   };
 
+  WaitFrameStatus status = WaitFrameStatus::Stopped;
   if (timeout_s.has_value()) {
     const auto dur = std::chrono::duration<double>(*timeout_s);
-    if (!frame_cv_.wait_for(lk, dur, pred))
-      return std::nullopt;
+    if (!frame_cv_.wait_for(lk, dur, pred)) {
+      status = WaitFrameStatus::Timeout;
+      if (stats_enabled) {
+        stats_.on_wait_frame(status, now_steady_ns() - t0);
+      }
+      return WaitNextFrameResult{.status = status, .frame = std::nullopt};
+    }
   } else {
     frame_cv_.wait(lk, pred);
   }
 
-  if (!running())
-    return std::nullopt;
-  return latest_frame();
+  if (!running()) {
+    status = WaitFrameStatus::Stopped;
+    if (stats_enabled) {
+      stats_.on_wait_frame(status, now_steady_ns() - t0);
+    }
+    return WaitNextFrameResult{.status = status, .frame = std::nullopt};
+  }
+
+  auto f = latest_frame();
+  status = f ? WaitFrameStatus::Ok : WaitFrameStatus::Stopped;
+  if (stats_enabled) {
+    stats_.on_wait_frame(status, now_steady_ns() - t0);
+  }
+  return WaitNextFrameResult{.status = status, .frame = std::move(f)};
 }
 
 std::vector<Frame> Core::read_last_frames(int n) const {
@@ -305,6 +358,11 @@ void Core::sync_loop_(const std::stop_token &stoken) {
     const auto tick = TimestampNs{next.value};
     next.value += period_ns;
 
+    const auto stats_enabled = stats_.enabled();
+    const auto wake_lateness_ns =
+        stats_enabled ? (now_system_ns().value - tick.value) : 0;
+    const auto compute_t0 = stats_enabled ? now_steady_ns() : 0;
+
     // fetch samples <= tick
     JointSample<kArmDof> arm{};
     JointSample<kLegDof> leg{};
@@ -317,15 +375,30 @@ void Core::sync_loop_(const std::stop_token &stoken) {
     const auto imu_ok = find_leq_(imu_raw_, tick, imu_raw_.latest_index(),
                                   opt_.sync.max_backtrack, imu);
 
+    if (stats_enabled) {
+      stats_.on_sync_missing(arm_ok, leg_ok, imu_ok);
+    }
+
     Frame out{};
     out.stamp = tick;
 
     if (opt_.sync.require_all && !(arm_ok && leg_ok && imu_ok)) {
       out.valid = false;
+      if (stats_enabled) {
+        stats_.on_sync_frame_validity(false, true, false);
+        stats_.on_sync_require_all_missing(arm_ok, leg_ok, imu_ok);
+        stats_.on_sync_frame_written(!opt_.sync.drop_invalid,
+                                     opt_.sync.drop_invalid);
+      }
       if (!opt_.sync.drop_invalid) {
         frame_ring_.write([&](Frame &dst) { dst = out; });
         frame_seq_.fetch_add(1, std::memory_order_relaxed);
         frame_cv_.notify_all();
+      }
+      if (stats_enabled) {
+        const auto compute_ns = now_steady_ns() - compute_t0;
+        stats_.on_sync_tick(wake_lateness_ns, compute_ns,
+                            compute_ns > period_ns);
       }
       continue;
     }
@@ -345,8 +418,16 @@ void Core::sync_loop_(const std::stop_token &stoken) {
     out.skew_ns = skew;
     out.valid = (skew <= opt_.sync.max_skew_ns);
 
-    if (!out.valid && opt_.sync.drop_invalid)
+    if (!out.valid && opt_.sync.drop_invalid) {
+      if (stats_enabled) {
+        stats_.on_sync_frame_validity(false, false, true);
+        stats_.on_sync_frame_written(false, true);
+        const auto compute_ns = now_steady_ns() - compute_t0;
+        stats_.on_sync_tick(wake_lateness_ns, compute_ns,
+                            compute_ns > period_ns);
+      }
       continue;
+    }
 
     if (arm_ok && leg_ok && imu_ok) {
       if (opt_.use_closed_ankle) {
@@ -361,6 +442,13 @@ void Core::sync_loop_(const std::stop_token &stoken) {
     frame_ring_.write([&](Frame &dst) { dst = out; });
     frame_seq_.fetch_add(1, std::memory_order_relaxed);
     frame_cv_.notify_all();
+
+    if (stats_enabled) {
+      stats_.on_sync_frame_validity(out.valid, false, !out.valid);
+      stats_.on_sync_frame_written(true, false);
+      const auto compute_ns = now_steady_ns() - compute_t0;
+      stats_.on_sync_tick(wake_lateness_ns, compute_ns, compute_ns > period_ns);
+    }
   }
 }
 
@@ -432,6 +520,9 @@ void Core::set_leg_scalar(Field f, double scalar) {
 
 void Core::commit(std::optional<TimestampNs> stamp,
                   std::optional<Sequence32> seq) {
+  const auto stats_enabled = stats_.enabled();
+  const auto commit_t0 = stats_enabled ? now_steady_ns() : 0;
+
   PendingCommand<kArmDof> arm_cmd{};
   PendingCommand<kLegDof> leg_cmd{};
   TimestampNs s{};
@@ -442,6 +533,13 @@ void Core::commit(std::optional<TimestampNs> stamp,
     q = seq.value_or(Sequence32{++commit_seq_});
     arm_cmd = arm_pending_;
     leg_cmd = leg_pending_;
+  }
+
+  if (stats_enabled) {
+    const auto any_cmd = arm_cmd.has_any || leg_cmd.has_any;
+    stats_.on_commit_attempt(any_cmd);
+    stats_.on_publish_arm_attempt(arm_cmd.has_any);
+    stats_.on_publish_leg_attempt(leg_cmd.has_any);
   }
 
   if (opt_.use_closed_ankle) {
@@ -557,8 +655,41 @@ void Core::commit(std::optional<TimestampNs> stamp,
     }
   }
 
-  transport_->publish_arm_command(s, q, arm_cmd, opt_.arm_names);
-  transport_->publish_leg_command(s, q, leg_cmd, opt_.leg_names);
+  if (stats_enabled && arm_cmd.has_any) {
+    const auto t0 = now_steady_ns();
+    transport_->publish_arm_command(s, q, arm_cmd, opt_.arm_names);
+    stats_.on_publish_arm_duration(now_steady_ns() - t0);
+  } else {
+    transport_->publish_arm_command(s, q, arm_cmd, opt_.arm_names);
+  }
+
+  if (stats_enabled && leg_cmd.has_any) {
+    const auto t0 = now_steady_ns();
+    transport_->publish_leg_command(s, q, leg_cmd, opt_.leg_names);
+    stats_.on_publish_leg_duration(now_steady_ns() - t0);
+  } else {
+    transport_->publish_leg_command(s, q, leg_cmd, opt_.leg_names);
+  }
+
+  if (stats_enabled) {
+    stats_.on_commit_duration(now_steady_ns() - commit_t0);
+  }
+}
+
+void Core::set_statistics_config(Statistics::Config cfg) noexcept {
+  stats_.set_config(cfg);
+}
+
+Statistics::Config Core::statistics_config() const noexcept {
+  return stats_.config();
+}
+
+void Core::reset_statistics() noexcept {
+  stats_.reset(now_steady_ns());
+}
+
+StatisticsSnapshot Core::statistics_snapshot() const noexcept {
+  return stats_.snapshot(now_steady_ns());
 }
 
 }  // namespace aimrl_sdk
