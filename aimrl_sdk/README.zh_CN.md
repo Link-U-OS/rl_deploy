@@ -1,6 +1,6 @@
-# AimRL SDK（Python）
+[English](README.md) | 中文
 
-English version: `aimrl_sdk/README.md`
+# AimRL SDK（Python）
 
 `aimrl_sdk` 是一套面向 **AIMRT + ROS2 通信后端** 的 Python SDK（pybind11 绑定）。
 它提供了：
