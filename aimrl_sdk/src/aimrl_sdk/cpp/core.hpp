@@ -95,7 +95,7 @@ class Core final {
   WaitNextFrameResult wait_next_frame_ex(std::uint64_t after_seq,
                                          std::optional<double> timeout_s);
 
-  // read last n frames (oldest->newest). if not enough, pad leading invalid
+  // read last n frames (oldest->newest). if not enough, pad leading default
   // frames.
   std::vector<Frame> read_last_frames(int n) const;
 

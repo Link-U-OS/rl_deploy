@@ -50,7 +50,10 @@ struct ImuSample {
 
 struct Frame {
   TimestampNs stamp{};
-  bool valid{false};
+  // `complete`: whether arm+leg+imu samples were all available for this tick.
+  // `aligned`: whether the complete frame passes the time-skew check.
+  bool aligned{false};
+  bool complete{false};
   std::int64_t skew_ns{0};
   std::array<float, kFrameDim> x{};
 };
@@ -70,8 +73,6 @@ struct SyncConfig {
   double frame_hz{100.0};
   std::int64_t max_skew_ns{3'000'000}; // 3ms
   int max_backtrack{200};
-  bool require_all{true};
-  bool drop_invalid{false};
 };
 
 } // namespace aimrl_sdk

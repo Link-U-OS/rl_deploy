@@ -4,7 +4,7 @@
 
 `aimrl_sdk` 是一套面向 **AIMRT + ROS2 通信后端** 的 Python SDK（pybind11 绑定）。
 它提供了：
-- 观测帧（arm/leg/imu）拉流与“对齐帧”生成（timestamp 对齐、valid 标记）
+- 观测帧（arm/leg/imu）拉流与“对齐帧”生成（timestamp 对齐、aligned/complete 标记）
 - 关节命令下发（arm/leg 的 position/velocity/effort/Kp/Kd）
 - A2 踝关节闭链（toe A/B ↔ ankle pitch/roll）在 **观测/命令** 两侧的转换
 
@@ -26,7 +26,7 @@ ROS2 topics (/body_drive/*)
 AimRT Core + ros2_plugin (aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml)
             │
             ▼
-C++ Core（ring buffer + sync_loop 生成 aligned frame(valid/invalid)）
+C++ Core（ring buffer + sync_loop 生成 aligned frame，并提供 aligned/complete 标记）
             │
             ▼
 pybind11 bindings（`aimrl_sdk._bindings`）
@@ -36,7 +36,9 @@ Python API（`aimrl_sdk.open()/close()` + `StateInterface/CommandInterface`）
 ```
 
 关键点：
-- `StateInterface.latest_frame()` 返回 `(stamp_ns, valid, obs)`；`valid` 表示该帧是否满足对齐条件（时间戳偏差、数据齐全等）。
+- `StateInterface.latest_frame()` 返回 `(stamp_ns, aligned, complete, obs)`：
+  - `complete`：tick 时刻 arm/leg/imu 是否都齐
+  - `aligned`：在 `complete=True` 的前提下，是否满足 `max_skew_ms` 对齐约束
 - “对齐帧”的生成频率由 `sync_hz` 决定（`aimrl_sdk.open(sync_hz=...)`）。
 - 默认会启用 A2 踝关节闭链转换：观测中把 toe motorA/B 映射成 `(toe_pitch, toe_roll)`，命令侧把 ankle 指令再转换回 motorA/B（可通过 `use_closed_ankle=False` 关闭）。
 
@@ -82,9 +84,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 常用参数：
 - `config_path`: AimRT 后端 YAML；默认会用 `AIMRL_SDK_CONFIG`，否则回落到包内默认 `aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml`
 - `sync_hz`: aligned frame 生成频率（Hz）
-- `max_skew_ms`: 允许的最大时间戳偏差（ms），超出则该帧 `valid=False`
-- `require_all`: 若为 True，则 arm/leg/imu 任一缺失会标记 invalid
-- `drop_invalid`: 若为 True，则 invalid 帧不会写入对齐帧 ring
+- `max_skew_ms`: 允许的最大时间戳偏差（ms），超出则该帧 `aligned=False`
 - `use_closed_ankle`: 是否启用踝关节闭链转换（默认 True）
 - `enable_statistics`: 启用低开销运行时统计（默认 False）
 - `statistics_sample_every`: 统计采样 1/N 事件（默认 1）
@@ -92,28 +92,21 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 
 ### `StateInterface`
 
-- `latest_frame() -> (stamp_ns, valid, obs)`
-- `wait_frame(timeout_s=...) -> (stamp_ns, valid, obs)`：阻塞直到新帧（或超时）
+- `latest_frame() -> (stamp_ns, aligned, complete, obs)`
+- `wait_frame(timeout_s=...) -> (stamp_ns, aligned, complete, obs)`：阻塞直到新帧（或超时）
 - `statistics() -> dict`：统计快照（延迟/抖动、publish 耗时、sync 有效性/缺失原因等）
 - `configure_statistics(enabled, sample_every=1, ema_shift=4)`：运行时开关与采样/平滑控制
 - `reset_statistics()`：重置统计计数器
 
-#### 当帧 `valid=False`（或数据缺失）时，最终拿到的数据是什么样？
+#### 当帧 incomplete / unaligned 时，最终拿到的数据是什么样？
 
-SDK 在每个 sync tick 生成一帧“对齐帧”。你能否看到 invalid 帧、以及 `obs` 的内容，取决于 `require_all` （默认 True）和 `drop_invalid` （默认 False）：
+默认行为（面向强化学习部署的推荐默认）：
+- SDK 以 `sync_hz` 频率生成对齐帧并写入内部 ring。
+- `complete=False` 表示 tick 时刻 arm/leg/imu 任一路缺失。
+- `aligned=False` 表示在 `complete=True` 的前提下，时间戳偏差超过 `max_skew_ms`。
+- 当 `complete=False` 时，`obs` 会**保持为上一帧 complete 的观测**（如果启动阶段尚未得到任何 complete 帧，则 `obs` 全零）。
 
-- `drop_invalid=True`：invalid 帧**不会写入**内部 ring。
-  - `wait_frame()` 只会在有“写入的帧”到来时返回（所以一般看不到 `valid=False`）。
-  - `latest_frame()` 会持续返回**上一帧写入的结果**；当链路当前处于 invalid 时，看起来就像“拿到的是上一帧的数据”（确实如此，同时 `stamp_ns` 也会停在旧值）。
-- `drop_invalid=False`：invalid 帧会以 `valid=False` 写入 ring，`wait_frame()` 也可能返回 invalid 帧。
-
-`obs` 的内容：
-- **skew 导致 invalid**（arm+leg+imu 都齐，但时间戳偏差超过 `max_skew_ms`）：`valid=False`，但 `obs` 仍是**完整填充**的（只是标记为时序对齐失败）。
-- **数据缺失**（tick 时刻任一路缺失）：
-  - `require_all=True`：`valid=False`，`obs` 会被**全零填充**（不是上一帧，也不是“残缺拼起来”的帧）。
-  - `require_all=False`：该帧可能仍会被标记为 `valid=True`（只做 skew 判断），但由于 SDK 只有在 arm+leg+imu 三路都可用时才会填充 `obs`，所以 `obs` 依然是**全零**。如果你期望 `valid=True` 一定代表“数据完整可用”，请保持 `require_all=True`（默认值）。
-
-实用建议：用 `valid` 作为主要的“这帧能不能用”门控；启用 statistics 后，可用 `statistics()['sync']` 查看 invalid/缺失的具体原因统计。
+实用建议：用 `(complete and aligned)` 作为主要的“这帧能不能用”门控；启用 statistics 后，可用 `statistics()['sync']` 查看缺失/未对齐的计数与原因拆解。
 
 `obs` 是 `float32` 的 1D 向量，布局在 C++ 中定义，Python 侧用 `aimrl_sdk.OBS` 提供切片：
 - `obs[aimrl_sdk.OBS.leg_pos]`
@@ -137,7 +130,7 @@ SDK 在每个 sync tick 生成一帧“对齐帧”。你能否看到 invalid �
 `aimrl_sdk` 支持采集**低开销运行时统计**（默认关闭），重点覆盖：
 - **订阅链路**：arm/leg/imu 的延迟与抖动
 - **发布链路**：arm/leg JointCommand 的 publish 耗时，以及 `commit()` 总耗时
-- **对齐线程（sync_loop）**：每 tick 的性能、overrun、对齐帧 `valid/invalid` 的原因拆解
+- **对齐线程（sync_loop）**：每 tick 的性能、overrun、对齐帧 `aligned/complete` 的原因拆解
 - **同步等待（wait_frame）**：ok/timeout/stopped 计数与等待耗时
 
 设计目标：
@@ -155,7 +148,7 @@ SDK 在每个 sync tick 生成一帧“对齐帧”。你能否看到 invalid �
 - sync 线程每 tick 记录：
   - wake lateness：相对于理想 tick 时间（`tick`）醒来的“迟到量”
   - compute 时间与 overrun（简单判断：`compute_ns > tick_period_ns`）
-  - 对齐帧 invalid 的原因：`require_all` 缺失 vs `max_skew` 超限，以及具体缺失哪一路
+  - 对齐帧状态原因：数据缺失（`complete=False`） vs `max_skew` 超限（`aligned=False`），以及具体缺失哪一路
 
 注意：
 - 输出中所有时间相关字段单位都是 **ns**（纳秒）。
@@ -220,11 +213,11 @@ SDK 在每个 sync tick 生成一帧“对齐帧”。你能否看到 invalid �
 - `compute_ns`：每 tick 计算耗时（采样）
 - `missing_arm` / `missing_leg` / `missing_imu`：每 tick 缺失各路样本的次数
 - `frame_written`：写入 frame ring 的帧数
-- `frame_dropped_invalid`：由于 `drop_invalid=True` 被丢弃的 invalid 帧数
-- `frame_valid`：`valid=True` 帧数
-- `frame_invalid_require_all_missing`：`require_all=True` 且有一路缺失导致 invalid
-- `frame_invalid_missing_arm/leg/imu`：具体哪一路导致 require_all invalid
-- `frame_invalid_skew`：skew 超过阈值导致 invalid 的帧数
+- `frame_complete`：arm+leg+imu 都齐的帧数
+- `frame_incomplete`：至少缺失一路的帧数
+- `frame_aligned`：complete 且满足 skew 约束（可用对齐）的帧数
+- `frame_unaligned_skew`：complete 但 skew 超限的帧数
+- `frame_incomplete_missing_arm/leg/imu`：当出现 incomplete 时，具体缺失哪一路的计数
 
 #### `wait_frame`（同步订阅等待）
 
@@ -239,7 +232,7 @@ st, cmd = aimrl_sdk.open(sync_hz=100.0, enable_statistics=True, statistics_sampl
 snap = st.statistics()
 print("arm delay ema(ms) =", snap["arm_state"]["delay_ns"]["ema_ns"] / 1e6)
 print("commit ema(ms)    =", snap["commit_total"]["duration_ns"]["ema_ns"] / 1e6)
-print("sync invalid skew =", snap["sync"]["frame_invalid_skew"])
+print("sync unaligned(skew) =", snap["sync"]["frame_unaligned_skew"])
 ```
 
 ## 配置文件（example schema）与参数含义
@@ -331,9 +324,9 @@ example 使用 `aimrl_sdk/examples/configs/agibot_a2_dof12.yaml` 的 schema（�
 
 ### 2) `Latest frame is not aligned`
 
-说明当前对齐帧 `valid=False`，常见原因：
+通常表示 `(aligned=False)` 和/或 `(complete=False)`，常见原因：
 - 上游 topic 的时间戳抖动/延迟导致超过 `max_skew_ms`
-- arm/leg/imu 有一项缺失（`require_all=True`）
+- arm/leg/imu 有一项缺失（导致 `complete=False`）
 - `sync_hz` 与实际发布频率差异过大
 
-你可以通过 `aimrl_sdk.open(max_skew_ms=..., require_all=..., drop_invalid=...)` 调整策略。
+你可以通过 `aimrl_sdk.open(max_skew_ms=..., sync_hz=...)` 调整策略，并检查上游 timestamp/时钟同步。

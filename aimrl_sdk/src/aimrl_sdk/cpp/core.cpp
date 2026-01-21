@@ -351,6 +351,8 @@ void Core::sync_loop_(const std::stop_token &stoken) {
   auto next = now_system_ns();
   next.value = (next.value / period_ns + 1) * period_ns;
 
+  std::array<float, kFrameDim> last_x{};
+
   while (!stoken.stop_requested() && running()) {
     const auto tp = std::chrono::system_clock::time_point(
         std::chrono::nanoseconds(next.value));
@@ -381,27 +383,7 @@ void Core::sync_loop_(const std::stop_token &stoken) {
 
     Frame out{};
     out.stamp = tick;
-
-    if (opt_.sync.require_all && !(arm_ok && leg_ok && imu_ok)) {
-      out.valid = false;
-      if (stats_enabled) {
-        stats_.on_sync_frame_validity(false, true, false);
-        stats_.on_sync_require_all_missing(arm_ok, leg_ok, imu_ok);
-        stats_.on_sync_frame_written(!opt_.sync.drop_invalid,
-                                     opt_.sync.drop_invalid);
-      }
-      if (!opt_.sync.drop_invalid) {
-        frame_ring_.write([&](Frame &dst) { dst = out; });
-        frame_seq_.fetch_add(1, std::memory_order_relaxed);
-        frame_cv_.notify_all();
-      }
-      if (stats_enabled) {
-        const auto compute_ns = now_steady_ns() - compute_t0;
-        stats_.on_sync_tick(wake_lateness_ns, compute_ns,
-                            compute_ns > period_ns);
-      }
-      continue;
-    }
+    out.complete = (arm_ok && leg_ok && imu_ok);
 
     // skew w.r.t tick
     std::int64_t skew = 0;
@@ -416,20 +398,9 @@ void Core::sync_loop_(const std::stop_token &stoken) {
                                 std::llabs(imu.stamp.value - tick.value)));
 
     out.skew_ns = skew;
-    out.valid = (skew <= opt_.sync.max_skew_ns);
+    out.aligned = out.complete && (skew <= opt_.sync.max_skew_ns);
 
-    if (!out.valid && opt_.sync.drop_invalid) {
-      if (stats_enabled) {
-        stats_.on_sync_frame_validity(false, false, true);
-        stats_.on_sync_frame_written(false, true);
-        const auto compute_ns = now_steady_ns() - compute_t0;
-        stats_.on_sync_tick(wake_lateness_ns, compute_ns,
-                            compute_ns > period_ns);
-      }
-      continue;
-    }
-
-    if (arm_ok && leg_ok && imu_ok) {
+    if (out.complete) {
       if (opt_.use_closed_ankle) {
         auto leg_joint = leg;  // convert motor-space ankle -> (pitch,roll)
         apply_closed_ankle_state_(leg_joint, opt_.closed_ankle);
@@ -437,6 +408,11 @@ void Core::sync_loop_(const std::stop_token &stoken) {
       } else {
         fill_arm_leg_imu(out, arm, leg, imu);
       }
+      last_x = out.x;
+    } else {
+      // Keep last complete observation to avoid feeding zero-filled data into RL
+      // loops; callers can use `complete/aligned` flags to decide gating.
+      out.x = last_x;
     }
 
     frame_ring_.write([&](Frame &dst) { dst = out; });
@@ -444,8 +420,11 @@ void Core::sync_loop_(const std::stop_token &stoken) {
     frame_cv_.notify_all();
 
     if (stats_enabled) {
-      stats_.on_sync_frame_validity(out.valid, false, !out.valid);
-      stats_.on_sync_frame_written(true, false);
+      if (!out.complete) {
+        stats_.on_sync_incomplete_missing(arm_ok, leg_ok, imu_ok);
+      }
+      stats_.on_sync_frame_flags(out.complete, out.aligned);
+      stats_.on_sync_frame_written(true);
       const auto compute_ns = now_steady_ns() - compute_t0;
       stats_.on_sync_tick(wake_lateness_ns, compute_ns, compute_ns > period_ns);
     }

@@ -181,14 +181,13 @@ py::dict sync_to_dict(const SyncStatsSnapshot &s) {
   d["missing_leg"] = py::int_(s.missing_leg);
   d["missing_imu"] = py::int_(s.missing_imu);
   d["frame_written"] = py::int_(s.frame_written);
-  d["frame_dropped_invalid"] = py::int_(s.frame_dropped_invalid);
-  d["frame_valid"] = py::int_(s.frame_valid);
-  d["frame_invalid_require_all_missing"] =
-      py::int_(s.frame_invalid_require_all_missing);
-  d["frame_invalid_missing_arm"] = py::int_(s.frame_invalid_missing_arm);
-  d["frame_invalid_missing_leg"] = py::int_(s.frame_invalid_missing_leg);
-  d["frame_invalid_missing_imu"] = py::int_(s.frame_invalid_missing_imu);
-  d["frame_invalid_skew"] = py::int_(s.frame_invalid_skew);
+  d["frame_complete"] = py::int_(s.frame_complete);
+  d["frame_incomplete"] = py::int_(s.frame_incomplete);
+  d["frame_aligned"] = py::int_(s.frame_aligned);
+  d["frame_unaligned_skew"] = py::int_(s.frame_unaligned_skew);
+  d["frame_incomplete_missing_arm"] = py::int_(s.frame_incomplete_missing_arm);
+  d["frame_incomplete_missing_leg"] = py::int_(s.frame_incomplete_missing_leg);
+  d["frame_incomplete_missing_imu"] = py::int_(s.frame_incomplete_missing_imu);
   return d;
 }
 
@@ -256,12 +255,12 @@ PYBIND11_MODULE(_bindings, m) {
              if (!f) {
                py::array_t<float> x(kFrameDim);
                std::memset(x.mutable_data(), 0, sizeof(float) * kFrameDim);
-               return py::make_tuple(std::int64_t{0}, false, x);
+               return py::make_tuple(std::int64_t{0}, false, false, x);
              }
              py::array_t<float> x(kFrameDim);
              std::memcpy(x.mutable_data(), f->x.data(),
                          sizeof(float) * kFrameDim);
-             return py::make_tuple(f->stamp.value, f->valid, x);
+             return py::make_tuple(f->stamp.value, f->aligned, f->complete, x);
            })
       .def(
           "wait_frame",
@@ -280,7 +279,8 @@ PYBIND11_MODULE(_bindings, m) {
             py::array_t<float> x(kFrameDim);
             std::memcpy(x.mutable_data(), r.frame->x.data(),
                         sizeof(float) * kFrameDim);
-            return py::make_tuple(r.frame->stamp.value, r.frame->valid, x);
+            return py::make_tuple(r.frame->stamp.value, r.frame->aligned,
+                                  r.frame->complete, x);
           },
           py::arg("timeout_s") = py::none())
       .def("statistics",
@@ -300,21 +300,24 @@ PYBIND11_MODULE(_bindings, m) {
         auto frames = self.core->read_last_frames(n);
 
         py::array_t<std::int64_t> stamps(n);
-        py::array_t<std::uint8_t> valids(n);
+        py::array_t<std::uint8_t> aligneds(n);
+        py::array_t<std::uint8_t> completes(n);
         py::array_t<float> X({n, kFrameDim});
 
         auto *sp = stamps.mutable_data();
-        auto *vp = valids.mutable_data();
+        auto *ap = aligneds.mutable_data();
+        auto *cp = completes.mutable_data();
         auto *xp = X.mutable_data();
 
         for (int i = 0; i < n; ++i) {
           const auto &f = frames[static_cast<std::size_t>(i)];
           sp[i] = f.stamp.value;
-          vp[i] = static_cast<std::uint8_t>(f.valid);
+          ap[i] = static_cast<std::uint8_t>(f.aligned);
+          cp[i] = static_cast<std::uint8_t>(f.complete);
           std::memcpy(xp + static_cast<std::size_t>(i) * kFrameDim, f.x.data(),
                       sizeof(float) * kFrameDim);
         }
-        return py::make_tuple(stamps, valids, X);
+        return py::make_tuple(stamps, aligneds, completes, X);
       });
 
   py::class_<PyCmd>(m, "CommandInterface")
@@ -401,8 +404,7 @@ PYBIND11_MODULE(_bindings, m) {
   m.def(
       "open",
       [](const py::object &config_path, double sync_hz, double max_skew_ms,
-         int max_backtrack, bool require_all, bool drop_invalid,
-         std::uint32_t raw_ring, std::uint32_t frame_ring,
+         int max_backtrack, std::uint32_t raw_ring, std::uint32_t frame_ring,
          const py::object &arm_names, const py::object &leg_names,
          bool use_closed_ankle, bool ankle_torque_control,
          int ankle_motor1_direction, int ankle_motor2_direction,
@@ -427,8 +429,6 @@ PYBIND11_MODULE(_bindings, m) {
         }
         opt.sync.max_skew_ns = static_cast<std::int64_t>(max_skew_ns_f);
         opt.sync.max_backtrack = max_backtrack;
-        opt.sync.require_all = require_all;
-        opt.sync.drop_invalid = drop_invalid;
 
         opt.use_closed_ankle = use_closed_ankle;
         opt.ankle_torque_control = ankle_torque_control;
@@ -472,10 +472,8 @@ Open the AimRL SDK and return `(state, cmd)`.
   config_path: Optional path to the AimRT backend YAML. If None/empty, uses
     `AIMRL_SDK_CONFIG` (if set) or the built-in default.
   sync_hz: Frame synchronization frequency (Hz) for generating aligned frames.
-  max_skew_ms: Max allowed timestamp skew (ms) for a frame to be marked `valid`.
+  max_skew_ms: Max allowed timestamp skew (ms) for a frame to be marked `aligned`.
   max_backtrack: Max samples to scan backward per tick to find `<= tick` samples.
-  require_all: If True, mark frame invalid if any of arm/leg/imu is missing.
-  drop_invalid: If True, invalid frames are not written to the frame ring.
   raw_ring: Raw sample ring capacity (arm/leg/imu).
   frame_ring: Aligned frame ring capacity.
   arm_names: Optional list[str] of length 14 for command joint names.
@@ -491,7 +489,6 @@ Open the AimRL SDK and return `(state, cmd)`.
 )pbdoc",
       py::arg("config_path") = py::none(), py::arg("sync_hz") = 100.0,
       py::arg("max_skew_ms") = 3.0, py::arg("max_backtrack") = 200,
-      py::arg("require_all") = true, py::arg("drop_invalid") = false,
       py::arg("raw_ring") = 2048, py::arg("frame_ring") = 512,
       py::arg("arm_names") = py::none(), py::arg("leg_names") = py::none(),
       py::arg("use_closed_ankle") = true,

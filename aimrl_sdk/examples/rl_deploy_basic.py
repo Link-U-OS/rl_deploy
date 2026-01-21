@@ -238,8 +238,8 @@ def main() -> None:
 
     while True:
         logger.info("Waiting for first aligned frame")
-        stamp_ns, aligned, _ = state.wait_frame(timeout_s=1.0)
-        if aligned and stamp_ns > 0:
+        stamp_ns, aligned, complete, _ = state.wait_frame(timeout_s=1.0)
+        if aligned and complete and stamp_ns > 0:
             logger.info(f"Received first aligned frame at timestamp: {stamp_ns / 1e9:.3f} s")
             break
 
@@ -257,12 +257,18 @@ def main() -> None:
         last_align_warn_t = 0.0
         while True:
             loop_idx += 1
-            stamp_ns, aligned, obs = state.latest_frame()
+            stamp_ns, aligned, complete, obs = state.latest_frame()
 
-            if not aligned:
+            if not complete:
                 now = time.monotonic()
                 if last_aligned or (now - last_align_warn_t) >= 1.0:
-                    logger.warning("Latest frame is not aligned")
+                    logger.warning("Latest frame is incomplete (missing arm/leg/imu); using held last observation")
+                    last_align_warn_t = now
+                last_aligned = False
+            elif not aligned:
+                now = time.monotonic()
+                if last_aligned or (now - last_align_warn_t) >= 1.0:
+                    logger.warning("Latest frame is not aligned (skew too large)")
                     last_align_warn_t = now
                 last_aligned = False
             elif not last_aligned:
@@ -380,10 +386,10 @@ def main() -> None:
                         f"    ticks         : {int(sync.get('tick_total', 0)):,}   (overrun: {int(sync.get('tick_overrun', 0)):,})\n"
                         f"    frames:\n"
                         f"      written     : {int(sync.get('frame_written', 0)):,}\n"
-                        f"      dropped_inv : {int(sync.get('frame_dropped_invalid', 0)):,}\n"
-                        f"      valid       : {int(sync.get('frame_valid', 0)):,}\n"
-                        f"      invalid     : {int(sync.get('frame_written', 0)) - int(sync.get('frame_valid', 0)):,} (require_all_missing: {int(sync.get('frame_invalid_require_all_missing', 0)):,}, skew: {int(sync.get('frame_invalid_skew', 0)):,})\n"
-                        f"        missing   : arm {int(sync.get('frame_invalid_missing_arm', 0)):,} | leg {int(sync.get('frame_invalid_missing_leg', 0)):,} | imu {int(sync.get('frame_invalid_missing_imu', 0)):,}\n"
+                        f"      complete    : {int(sync.get('frame_complete', 0)):,}\n"
+                        f"      incomplete  : {int(sync.get('frame_incomplete', 0)):,} (missing: arm {int(sync.get('frame_incomplete_missing_arm', 0)):,} | leg {int(sync.get('frame_incomplete_missing_leg', 0)):,} | imu {int(sync.get('frame_incomplete_missing_imu', 0)):,})\n"
+                        f"      aligned     : {int(sync.get('frame_aligned', 0)):,}\n"
+                        f"      unaligned   : {int(sync.get('frame_unaligned_skew', 0)):,} (skew)\n"
                         f"    wait_frame    : ok {int(wait_frame.get('ok', 0)):,} | timeout {int(wait_frame.get('timeout', 0)):,} | stopped {int(wait_frame.get('stopped', 0)):,}",
                     )
             time.sleep(dt)

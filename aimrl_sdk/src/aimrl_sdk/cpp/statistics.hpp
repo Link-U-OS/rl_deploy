@@ -191,13 +191,13 @@ struct SyncStatsSnapshot {
   std::uint64_t missing_imu{0};
 
   std::uint64_t frame_written{0};
-  std::uint64_t frame_dropped_invalid{0};
-  std::uint64_t frame_valid{0};
-  std::uint64_t frame_invalid_require_all_missing{0};
-  std::uint64_t frame_invalid_missing_arm{0};
-  std::uint64_t frame_invalid_missing_leg{0};
-  std::uint64_t frame_invalid_missing_imu{0};
-  std::uint64_t frame_invalid_skew{0};
+  std::uint64_t frame_complete{0};
+  std::uint64_t frame_incomplete{0};
+  std::uint64_t frame_aligned{0};
+  std::uint64_t frame_unaligned_skew{0};
+  std::uint64_t frame_incomplete_missing_arm{0};
+  std::uint64_t frame_incomplete_missing_leg{0};
+  std::uint64_t frame_incomplete_missing_imu{0};
 };
 
 class SyncStats final {
@@ -213,13 +213,13 @@ class SyncStats final {
     missing_imu_.store(0, std::memory_order_relaxed);
 
     frame_written_.store(0, std::memory_order_relaxed);
-    frame_dropped_invalid_.store(0, std::memory_order_relaxed);
-    frame_valid_.store(0, std::memory_order_relaxed);
-    frame_invalid_require_all_missing_.store(0, std::memory_order_relaxed);
-    frame_invalid_missing_arm_.store(0, std::memory_order_relaxed);
-    frame_invalid_missing_leg_.store(0, std::memory_order_relaxed);
-    frame_invalid_missing_imu_.store(0, std::memory_order_relaxed);
-    frame_invalid_skew_.store(0, std::memory_order_relaxed);
+    frame_complete_.store(0, std::memory_order_relaxed);
+    frame_incomplete_.store(0, std::memory_order_relaxed);
+    frame_aligned_.store(0, std::memory_order_relaxed);
+    frame_unaligned_skew_.store(0, std::memory_order_relaxed);
+    frame_incomplete_missing_arm_.store(0, std::memory_order_relaxed);
+    frame_incomplete_missing_leg_.store(0, std::memory_order_relaxed);
+    frame_incomplete_missing_imu_.store(0, std::memory_order_relaxed);
   }
 
   void on_tick(std::int64_t wake_lateness_ns, std::int64_t compute_ns,
@@ -243,31 +243,31 @@ class SyncStats final {
       missing_imu_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  void on_frame_written(bool wrote, bool dropped_invalid) noexcept {
+  void on_frame_written(bool wrote) noexcept {
     if (wrote)
       frame_written_.fetch_add(1, std::memory_order_relaxed);
-    if (dropped_invalid)
-      frame_dropped_invalid_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  void on_frame_validity(bool valid, bool invalid_require_all_missing,
-                         bool invalid_skew) noexcept {
-    if (valid)
-      frame_valid_.fetch_add(1, std::memory_order_relaxed);
-    if (invalid_require_all_missing)
-      frame_invalid_require_all_missing_.fetch_add(1,
-                                                   std::memory_order_relaxed);
-    if (invalid_skew)
-      frame_invalid_skew_.fetch_add(1, std::memory_order_relaxed);
+  void on_frame_flags(bool complete, bool aligned) noexcept {
+    if (complete) {
+      frame_complete_.fetch_add(1, std::memory_order_relaxed);
+      if (aligned) {
+        frame_aligned_.fetch_add(1, std::memory_order_relaxed);
+      } else {
+        frame_unaligned_skew_.fetch_add(1, std::memory_order_relaxed);
+      }
+    } else {
+      frame_incomplete_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
-  void on_require_all_missing(bool arm_ok, bool leg_ok, bool imu_ok) noexcept {
+  void on_incomplete_missing(bool arm_ok, bool leg_ok, bool imu_ok) noexcept {
     if (!arm_ok)
-      frame_invalid_missing_arm_.fetch_add(1, std::memory_order_relaxed);
+      frame_incomplete_missing_arm_.fetch_add(1, std::memory_order_relaxed);
     if (!leg_ok)
-      frame_invalid_missing_leg_.fetch_add(1, std::memory_order_relaxed);
+      frame_incomplete_missing_leg_.fetch_add(1, std::memory_order_relaxed);
     if (!imu_ok)
-      frame_invalid_missing_imu_.fetch_add(1, std::memory_order_relaxed);
+      frame_incomplete_missing_imu_.fetch_add(1, std::memory_order_relaxed);
   }
 
   SyncStatsSnapshot snapshot() const noexcept {
@@ -280,18 +280,17 @@ class SyncStats final {
     out.missing_leg = missing_leg_.load(std::memory_order_relaxed);
     out.missing_imu = missing_imu_.load(std::memory_order_relaxed);
     out.frame_written = frame_written_.load(std::memory_order_relaxed);
-    out.frame_dropped_invalid =
-        frame_dropped_invalid_.load(std::memory_order_relaxed);
-    out.frame_valid = frame_valid_.load(std::memory_order_relaxed);
-    out.frame_invalid_require_all_missing =
-        frame_invalid_require_all_missing_.load(std::memory_order_relaxed);
-    out.frame_invalid_missing_arm =
-        frame_invalid_missing_arm_.load(std::memory_order_relaxed);
-    out.frame_invalid_missing_leg =
-        frame_invalid_missing_leg_.load(std::memory_order_relaxed);
-    out.frame_invalid_missing_imu =
-        frame_invalid_missing_imu_.load(std::memory_order_relaxed);
-    out.frame_invalid_skew = frame_invalid_skew_.load(std::memory_order_relaxed);
+    out.frame_complete = frame_complete_.load(std::memory_order_relaxed);
+    out.frame_incomplete = frame_incomplete_.load(std::memory_order_relaxed);
+    out.frame_aligned = frame_aligned_.load(std::memory_order_relaxed);
+    out.frame_unaligned_skew =
+        frame_unaligned_skew_.load(std::memory_order_relaxed);
+    out.frame_incomplete_missing_arm =
+        frame_incomplete_missing_arm_.load(std::memory_order_relaxed);
+    out.frame_incomplete_missing_leg =
+        frame_incomplete_missing_leg_.load(std::memory_order_relaxed);
+    out.frame_incomplete_missing_imu =
+        frame_incomplete_missing_imu_.load(std::memory_order_relaxed);
     return out;
   }
 
@@ -316,13 +315,13 @@ class SyncStats final {
   std::atomic<std::uint64_t> missing_imu_{0};
 
   std::atomic<std::uint64_t> frame_written_{0};
-  std::atomic<std::uint64_t> frame_dropped_invalid_{0};
-  std::atomic<std::uint64_t> frame_valid_{0};
-  std::atomic<std::uint64_t> frame_invalid_require_all_missing_{0};
-  std::atomic<std::uint64_t> frame_invalid_missing_arm_{0};
-  std::atomic<std::uint64_t> frame_invalid_missing_leg_{0};
-  std::atomic<std::uint64_t> frame_invalid_missing_imu_{0};
-  std::atomic<std::uint64_t> frame_invalid_skew_{0};
+  std::atomic<std::uint64_t> frame_complete_{0};
+  std::atomic<std::uint64_t> frame_incomplete_{0};
+  std::atomic<std::uint64_t> frame_aligned_{0};
+  std::atomic<std::uint64_t> frame_unaligned_skew_{0};
+  std::atomic<std::uint64_t> frame_incomplete_missing_arm_{0};
+  std::atomic<std::uint64_t> frame_incomplete_missing_leg_{0};
+  std::atomic<std::uint64_t> frame_incomplete_missing_imu_{0};
 };
 
 struct PublishStatsSnapshot {
@@ -581,23 +580,23 @@ class Statistics final {
     sync_.on_missing(arm_ok, leg_ok, imu_ok);
   }
 
-  void on_sync_frame_written(bool wrote, bool dropped_invalid) noexcept {
+  void on_sync_frame_written(bool wrote) noexcept {
     if (!enabled())
       return;
-    sync_.on_frame_written(wrote, dropped_invalid);
+    sync_.on_frame_written(wrote);
   }
 
-  void on_sync_frame_validity(bool valid, bool invalid_require_all_missing,
-                              bool invalid_skew) noexcept {
+  void on_sync_frame_flags(bool complete, bool aligned) noexcept {
     if (!enabled())
       return;
-    sync_.on_frame_validity(valid, invalid_require_all_missing, invalid_skew);
+    sync_.on_frame_flags(complete, aligned);
   }
 
-  void on_sync_require_all_missing(bool arm_ok, bool leg_ok, bool imu_ok) noexcept {
+  void on_sync_incomplete_missing(bool arm_ok, bool leg_ok,
+                                  bool imu_ok) noexcept {
     if (!enabled())
       return;
-    sync_.on_require_all_missing(arm_ok, leg_ok, imu_ok);
+    sync_.on_incomplete_missing(arm_ok, leg_ok, imu_ok);
   }
 
   void on_wait_frame(WaitFrameStatus st, std::int64_t wait_ns) noexcept {

@@ -3,7 +3,7 @@ English | [中文](README.zh_CN.md)
 # AimRL SDK (Python)
 
 `aimrl_sdk` is a Python SDK (pybind11 bindings) designed for an **AIMRT + ROS2 backend**. It provides:
-- streaming observation frames (arm/leg/imu) and generating “aligned frames” (timestamp alignment + `valid` flag)
+- streaming observation frames (arm/leg/imu) and generating “aligned frames” (timestamp alignment + `aligned/complete` flags)
 - sending joint commands (arm/leg `position/velocity/effort/Kp/Kd`)
 - A2 closed-chain ankle conversion (toe A/B ↔ ankle pitch/roll) on both the **observation** and **command** sides
 
@@ -25,7 +25,7 @@ ROS2 topics (/body_drive/*)
 AimRT Core + ros2_plugin (aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml)
             │
             ▼
-C++ Core (ring buffers + sync_loop to produce aligned frames valid/invalid)
+C++ Core (ring buffers + sync_loop to produce aligned frames with `aligned/complete` flags)
             │
             ▼
 pybind11 bindings (`aimrl_sdk._bindings`)
@@ -35,7 +35,9 @@ Python API (`aimrl_sdk.open()/close()` + `StateInterface/CommandInterface`)
 ```
 
 Key points:
-- `StateInterface.latest_frame()` returns `(stamp_ns, valid, obs)`; `valid` indicates whether the frame passes the alignment constraints (timestamp skew, completeness, etc.).
+- `StateInterface.latest_frame()` returns `(stamp_ns, aligned, complete, obs)`.
+  - `complete`: whether arm+leg+imu are all available for that tick
+  - `aligned`: whether a complete frame passes the timestamp-skew constraint (`max_skew_ms`)
 - Aligned-frame generation frequency is controlled by `sync_hz` (`aimrl_sdk.open(sync_hz=...)`).
 - By default, the A2 ankle closed-chain conversion is enabled: toe motorA/B are mapped to `(toe_pitch, toe_roll)` in observations; ankle commands are mapped back to motorA/B (disable with `use_closed_ankle=False`).
 
@@ -81,9 +83,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 Common parameters:
 - `config_path`: path to the AimRT backend YAML; by default it uses `AIMRL_SDK_CONFIG`, otherwise falls back to `aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml`
 - `sync_hz`: aligned-frame frequency (Hz)
-- `max_skew_ms`: maximum allowed timestamp skew (ms); frames beyond this will be `valid=False`
-- `require_all`: if True, frame becomes invalid if any of arm/leg/imu is missing
-- `drop_invalid`: if True, invalid frames are not written to the aligned-frame ring
+- `max_skew_ms`: maximum allowed timestamp skew (ms); frames beyond this will be `aligned=False`
 - `use_closed_ankle`: enable the ankle closed-chain conversion (default True)
 - `enable_statistics`: enable low-overhead runtime statistics (default False)
 - `statistics_sample_every`: sample 1/N events for stats aggregation (default 1)
@@ -91,28 +91,21 @@ Common parameters:
 
 ### `StateInterface`
 
-- `latest_frame() -> (stamp_ns, valid, obs)`
-- `wait_frame(timeout_s=...) -> (stamp_ns, valid, obs)`: block until a new frame arrives (or timeout)
+- `latest_frame() -> (stamp_ns, aligned, complete, obs)`
+- `wait_frame(timeout_s=...) -> (stamp_ns, aligned, complete, obs)`: block until a new frame arrives (or timeout)
 - `statistics() -> dict`: snapshot counters/latency/jitter/publish cost/sync validity breakdown
 - `configure_statistics(enabled, sample_every=1, ema_shift=4)`: runtime toggle + sampling/smoothing
 - `reset_statistics()`: reset all statistics counters
 
-#### What happens when a frame is `valid=False` (or data is missing)
+#### What happens when a frame is not complete/aligned
 
-The SDK produces an aligned frame on each sync tick. Whether you see invalid frames, and what `obs` contains, depends on `require_all` (default True) and `drop_invalid` (default False):
+Default behavior (recommended for RL deployment):
+- Frames are generated at `sync_hz` and written to the internal ring.
+- `complete=False` if any of arm/leg/imu is missing at that tick.
+- `aligned=False` if the frame is complete but exceeds the `max_skew_ms` constraint.
+- If `complete=False`, `obs` is **held from the last complete frame** (at startup, before any complete frame exists, it is all zeros).
 
-- `drop_invalid=True`: invalid frames are **not written** to the internal ring.
-  - `wait_frame()` will only return when a **written** frame arrives (so you usually won’t observe `valid=False`).
-  - `latest_frame()` keeps returning the **last written** frame. If the stream is currently invalid, this can look like “previous frame” (it is, and the `stamp_ns` will also be older).
-- `drop_invalid=False`: invalid frames are written with `valid=False`, and `wait_frame()` can return them like any other frame.
-
-What `obs` looks like:
-- **Skew invalid** (all arm+leg+imu are present, but skew exceeds `max_skew_ms`): `valid=False` and `obs` is still **fully populated** (but marked invalid due to timing misalignment).
-- **Missing data** (any stream missing at that tick):
-  - with `require_all=True`: `valid=False` and `obs` is **zero-filled** (not “previous frame”, not a partial frame).
-  - with `require_all=False`: the frame may still be marked `valid=True` (skew-only check), but `obs` is still **zero-filled** because the SDK only fills `obs` when arm+leg+imu are all available. If you need complete data, keep `require_all=True` (default).
-
-Practical tip: treat `valid` as the primary “can I use this frame?” gate. If you enable stats, `statistics()["sync"]` can tell you *why* frames were invalid/missing.
+Practical tip: treat `(complete and aligned)` as the primary “can I use this frame?” gate. If you enable stats, `statistics()["sync"]` provides counts/breakdowns.
 
 `obs` is a 1D `float32` vector with layout defined in C++. Python exposes slices via `aimrl_sdk.OBS`, e.g.:
 - `obs[aimrl_sdk.OBS.leg_pos]`
@@ -151,7 +144,7 @@ Design goals:
 - In the sync thread, it measures:
   - wake lateness (how late the thread wakes up relative to the ideal tick time)
   - compute time per tick, and a simple overrun indicator (`compute_ns > tick_period_ns`)
-  - aligned-frame validity causes: missing data (require_all) vs skew threshold
+  - aligned-frame status causes: incomplete data (`complete=False`) vs skew threshold (`aligned=False`)
 
 Notes/assumptions:
 - All time metrics are in **nanoseconds** (`*_ns`) in the output.
@@ -216,11 +209,11 @@ Interpretation:
 - `compute_ns`: compute duration per tick (sampled)
 - `missing_arm` / `missing_leg` / `missing_imu`: how often each stream was missing a usable sample at tick time
 - `frame_written`: frames written to the ring
-- `frame_dropped_invalid`: invalid frames dropped due to `drop_invalid=True`
-- `frame_valid`: frames with `valid=True`
-- `frame_invalid_require_all_missing`: frames invalid because `require_all=True` and at least one stream was missing
-- `frame_invalid_missing_arm` / `frame_invalid_missing_leg` / `frame_invalid_missing_imu`: which stream(s) caused require_all invalidation
-- `frame_invalid_skew`: frames invalid because timestamp skew exceeded `max_skew_ns`
+- `frame_complete`: frames where arm+leg+imu were all available
+- `frame_incomplete`: frames where at least one stream was missing
+- `frame_aligned`: frames that are complete and pass the skew constraint
+- `frame_unaligned_skew`: frames that are complete but fail the skew constraint
+- `frame_incomplete_missing_arm/leg/imu`: which stream(s) were missing when `frame_incomplete` occurred
 
 #### `wait_frame` (sync subscription / blocking wait)
 
@@ -235,7 +228,7 @@ st, cmd = aimrl_sdk.open(sync_hz=100.0, enable_statistics=True, statistics_sampl
 snap = st.statistics()
 print("arm delay ema(ms) =", snap["arm_state"]["delay_ns"]["ema_ns"] / 1e6)
 print("commit ema(ms)    =", snap["commit_total"]["duration_ns"]["ema_ns"] / 1e6)
-print("sync invalid skew =", snap["sync"]["frame_invalid_skew"])
+print("sync unaligned(skew) =", snap["sync"]["frame_unaligned_skew"])
 ```
 
 ## Example Config Schema & Parameter Meanings
@@ -327,9 +320,9 @@ The device does not exist or permissions are missing:
 
 ### 2) `Latest frame is not aligned`
 
-This means the aligned frame is `valid=False`. Common causes:
+This usually means `(aligned=False)` and/or `(complete=False)`. Common causes:
 - upstream timestamp jitter/latency exceeds `max_skew_ms`
-- one of arm/leg/imu is missing while `require_all=True`
+- one of arm/leg/imu is missing (so `complete=False`)
 - `sync_hz` differs too much from the actual publish rate
 
-Tune via `aimrl_sdk.open(max_skew_ms=..., require_all=..., drop_invalid=...)`.
+Tune via `aimrl_sdk.open(max_skew_ms=..., sync_hz=...)` and by improving upstream timestamping/clock sync.
