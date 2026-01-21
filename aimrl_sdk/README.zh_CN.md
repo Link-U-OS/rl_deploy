@@ -117,7 +117,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 - **complete（数据齐全）**：
   - `complete = arm_ok && leg_ok && imu_ok`
 - **skew（时间戳偏差）**：
-  - `skew_ns = max(|arm.stamp - tick|, |leg.stamp - tick|, |imu.stamp - tick|)`（对存在的流取最大值）
+  - `skew_ns = max(arm.stamp, leg.stamp, imu.stamp) - min(arm.stamp, leg.stamp, imu.stamp)`（仅在 `complete=True` 时有意义）
 - **aligned（对齐成功）**：
   - `aligned = complete && (skew_ns <= max_skew_ms * 1e6)`
 
@@ -127,7 +127,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 - 当 `complete=False` 时，`obs` 会保持为上一帧 complete 的观测（见上一节）。
 
 关于 timestamp 的重要说明：
-- 对齐判断基于消息的 `header.stamp`（若 stamp 缺失/非法则用本地时间做兜底），因此上游时间戳是否正确、以及时钟是否同步，会显著影响 `aligned`。
+- 对齐判断基于消息的 `header.stamp`（若 stamp 缺失/非法则用本地时间做兜底），这里衡量的是“跨流一致性”（不是“相对 tick 的新鲜度”），因此上游时间戳是否正确、以及时钟是否同步，会显著影响 `aligned`。
 
 `obs` 是 `float32` 的 1D 向量，布局在 C++ 中定义，Python 侧用 `aimrl_sdk.OBS` 提供切片：
 - `obs[aimrl_sdk.OBS.leg_pos]`

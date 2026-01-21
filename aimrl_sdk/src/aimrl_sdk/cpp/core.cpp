@@ -385,20 +385,19 @@ void Core::sync_loop_(const std::stop_token &stoken) {
     out.stamp = tick;
     out.complete = (arm_ok && leg_ok && imu_ok);
 
-    // skew w.r.t tick
-    std::int64_t skew = 0;
-    if (arm_ok)
-      skew = std::max(skew, static_cast<std::int64_t>(
-                                std::llabs(arm.stamp.value - tick.value)));
-    if (leg_ok)
-      skew = std::max(skew, static_cast<std::int64_t>(
-                                std::llabs(leg.stamp.value - tick.value)));
-    if (imu_ok)
-      skew = std::max(skew, static_cast<std::int64_t>(
-                                std::llabs(imu.stamp.value - tick.value)));
-
-    out.skew_ns = skew;
-    out.aligned = out.complete && (skew <= opt_.sync.max_skew_ns);
+    // inter-stream skew: max(stamp)-min(stamp) among arm/leg/imu.
+    // This measures "cross-sensor alignment" rather than freshness vs tick.
+    if (out.complete) {
+      const auto min_stamp =
+          std::min({arm.stamp.value, leg.stamp.value, imu.stamp.value});
+      const auto max_stamp =
+          std::max({arm.stamp.value, leg.stamp.value, imu.stamp.value});
+      out.skew_ns = max_stamp - min_stamp;
+      out.aligned = (out.skew_ns <= opt_.sync.max_skew_ns);
+    } else {
+      out.skew_ns = 0;
+      out.aligned = false;
+    }
 
     if (out.complete) {
       if (opt_.use_closed_ankle) {

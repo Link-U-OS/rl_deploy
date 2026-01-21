@@ -116,7 +116,7 @@ The aligned-frame generator runs in a dedicated thread at `sync_hz`. For each ti
 - **Completeness**:
   - `complete = arm_ok && leg_ok && imu_ok`
 - **Skew**:
-  - `skew_ns = max(|arm.stamp - tick|, |leg.stamp - tick|, |imu.stamp - tick|)` over the streams that are present
+  - `skew_ns = max(arm.stamp, leg.stamp, imu.stamp) - min(arm.stamp, leg.stamp, imu.stamp)` (only meaningful when `complete=True`)
 - **Aligned**:
   - `aligned = complete && (skew_ns <= max_skew_ms * 1e6)`
 
@@ -126,7 +126,7 @@ Frame contents and timestamping:
 - When `complete=False`, `obs` is held from the last complete frame (see above).
 
 Important note about timestamps:
-- The alignment check is based on the message `header.stamp` (or a local fallback if the stamp is missing/invalid), so upstream clock sync and correct stamping strongly affect `aligned`.
+- The alignment check is based on the message `header.stamp` (or a local fallback if the stamp is missing/invalid), and it measures cross-stream consistency (not “freshness vs tick”).
 
 `obs` is a 1D `float32` vector with layout defined in C++. Python exposes slices via `aimrl_sdk.OBS`, e.g.:
 - `obs[aimrl_sdk.OBS.leg_pos]`
