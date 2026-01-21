@@ -369,10 +369,13 @@ def main() -> None:
                     sync = s.get("sync", {})
                     wait_frame = s.get("wait_frame", {})
                     uptime_s = float(s.get("uptime_ns", 0)) / 1e9
+                    age_arm = _metric_ms(sync.get("age_arm_ns", {}))
+                    age_leg = _metric_ms(sync.get("age_leg_ns", {}))
+                    age_imu = _metric_ms(sync.get("age_imu_ns", {}))
 
                     logger.info(
                         f"statistics (uptime={uptime_s:.1f}s, sample_every={int(s.get('sample_every', 1))}, ema_shift={int(s.get('ema_shift', 4))}):\n"
-                        f"  RX rate (Hz):   arm={arm_hz}  leg={leg_hz}  imu={imu_hz}\n"
+                        f"  RX rate  (Hz):  arm={arm_hz}  leg={leg_hz}  imu={imu_hz}\n"
                         f"  RX delay (ms):  arm={arm_delay} \n"
                         f"                  leg={leg_delay} \n"
                         f"                  imu={imu_delay} \n"
@@ -384,6 +387,9 @@ def main() -> None:
                         f"                  pub_leg={pub_leg} \n"
                         f"  SYNC:\n"
                         f"    ticks         : {int(sync.get('tick_total', 0)):,}   (overrun: {int(sync.get('tick_overrun', 0)):,})\n"
+                        f"    tick age (ms) : arm={age_arm} \n"
+                        f"                    leg={age_leg} \n"
+                        f"                    imu={age_imu} \n"
                         f"    frames:\n"
                         f"      written     : {int(sync.get('frame_written', 0)):,}\n"
                         f"      complete    : {int(sync.get('frame_complete', 0)):,}\n"

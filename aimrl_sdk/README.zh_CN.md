@@ -232,6 +232,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 - `tick_overrun`：compute 超过 tick 周期的次数（粗略 overrun）
 - `wake_lateness_ns`：醒来迟到量（采样）
 - `compute_ns`：每 tick 计算耗时（采样）
+- `age_arm_ns` / `age_leg_ns` / `age_imu_ns`：每路样本时间戳相对 tick 的“滞后量”（`tick - stamp`，采样）
 - `missing_arm` / `missing_leg` / `missing_imu`：每 tick 缺失各路样本的次数
 - `frame_written`：写入 frame ring 的帧数
 - `frame_complete`：arm+leg+imu 都齐的帧数

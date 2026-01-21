@@ -228,6 +228,7 @@ Interpretation:
 - `tick_overrun`: ticks whose compute time exceeded tick period (approximate “overrun”)
 - `wake_lateness_ns`: lateness relative to ideal tick time (sampled)
 - `compute_ns`: compute duration per tick (sampled)
+- `age_arm_ns` / `age_leg_ns` / `age_imu_ns`: per-stream stamp “age” relative to tick (`tick - stamp`, sampled)
 - `missing_arm` / `missing_leg` / `missing_imu`: how often each stream was missing a usable sample at tick time
 - `frame_written`: frames written to the ring
 - `frame_complete`: frames where arm+leg+imu were all available

@@ -185,6 +185,9 @@ struct SyncStatsSnapshot {
   std::uint64_t tick_overrun{0};
   StatsMetricSnapshot wake_lateness_ns{};
   StatsMetricSnapshot compute_ns{};
+  StatsMetricSnapshot age_arm_ns{};
+  StatsMetricSnapshot age_leg_ns{};
+  StatsMetricSnapshot age_imu_ns{};
 
   std::uint64_t missing_arm{0};
   std::uint64_t missing_leg{0};
@@ -207,6 +210,9 @@ class SyncStats final {
     tick_overrun_.store(0, std::memory_order_relaxed);
     wake_lateness_ns_.reset();
     compute_ns_.reset();
+    age_arm_ns_.reset();
+    age_leg_ns_.reset();
+    age_imu_ns_.reset();
 
     missing_arm_.store(0, std::memory_order_relaxed);
     missing_leg_.store(0, std::memory_order_relaxed);
@@ -223,7 +229,9 @@ class SyncStats final {
   }
 
   void on_tick(std::int64_t wake_lateness_ns, std::int64_t compute_ns,
-               bool overrun, std::uint32_t sample_every,
+               bool overrun, bool arm_ok, bool leg_ok, bool imu_ok,
+               std::int64_t age_arm_ns, std::int64_t age_leg_ns,
+               std::int64_t age_imu_ns, std::uint32_t sample_every,
                int ema_shift) noexcept {
     tick_total_.fetch_add(1, std::memory_order_relaxed);
     if (overrun)
@@ -231,6 +239,12 @@ class SyncStats final {
     if (should_sample_(sample_every)) {
       wake_lateness_ns_.add(wake_lateness_ns, ema_shift);
       compute_ns_.add(compute_ns, ema_shift);
+      if (arm_ok)
+        age_arm_ns_.add(age_arm_ns, ema_shift);
+      if (leg_ok)
+        age_leg_ns_.add(age_leg_ns, ema_shift);
+      if (imu_ok)
+        age_imu_ns_.add(age_imu_ns, ema_shift);
     }
   }
 
@@ -276,6 +290,9 @@ class SyncStats final {
     out.tick_overrun = tick_overrun_.load(std::memory_order_relaxed);
     out.wake_lateness_ns = wake_lateness_ns_.snapshot();
     out.compute_ns = compute_ns_.snapshot();
+    out.age_arm_ns = age_arm_ns_.snapshot();
+    out.age_leg_ns = age_leg_ns_.snapshot();
+    out.age_imu_ns = age_imu_ns_.snapshot();
     out.missing_arm = missing_arm_.load(std::memory_order_relaxed);
     out.missing_leg = missing_leg_.load(std::memory_order_relaxed);
     out.missing_imu = missing_imu_.load(std::memory_order_relaxed);
@@ -309,6 +326,9 @@ class SyncStats final {
   std::atomic<std::uint64_t> sample_gate_{0};
   StatsMetric wake_lateness_ns_{};
   StatsMetric compute_ns_{};
+  StatsMetric age_arm_ns_{};
+  StatsMetric age_leg_ns_{};
+  StatsMetric age_imu_ns_{};
 
   std::atomic<std::uint64_t> missing_arm_{0};
   std::atomic<std::uint64_t> missing_leg_{0};
@@ -566,11 +586,14 @@ class Statistics final {
   }
 
   void on_sync_tick(std::int64_t wake_lateness_ns, std::int64_t compute_ns,
-                    bool overrun) noexcept {
+                    bool overrun, bool arm_ok, bool leg_ok, bool imu_ok,
+                    std::int64_t age_arm_ns, std::int64_t age_leg_ns,
+                    std::int64_t age_imu_ns) noexcept {
     if (!enabled())
       return;
     const auto cfg = config_relaxed_();
-    sync_.on_tick(wake_lateness_ns, compute_ns, overrun, cfg.sample_every,
+    sync_.on_tick(wake_lateness_ns, compute_ns, overrun, arm_ok, leg_ok, imu_ok,
+                  age_arm_ns, age_leg_ns, age_imu_ns, cfg.sample_every,
                   cfg.ema_shift);
   }
 

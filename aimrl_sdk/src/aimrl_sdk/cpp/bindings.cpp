@@ -177,6 +177,9 @@ py::dict sync_to_dict(const SyncStatsSnapshot &s) {
   d["tick_overrun"] = py::int_(s.tick_overrun);
   d["wake_lateness_ns"] = metric_to_dict(s.wake_lateness_ns);
   d["compute_ns"] = metric_to_dict(s.compute_ns);
+  d["age_arm_ns"] = metric_to_dict(s.age_arm_ns);
+  d["age_leg_ns"] = metric_to_dict(s.age_leg_ns);
+  d["age_imu_ns"] = metric_to_dict(s.age_imu_ns);
   d["missing_arm"] = py::int_(s.missing_arm);
   d["missing_leg"] = py::int_(s.missing_leg);
   d["missing_imu"] = py::int_(s.missing_imu);

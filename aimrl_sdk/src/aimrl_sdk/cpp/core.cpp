@@ -425,7 +425,12 @@ void Core::sync_loop_(const std::stop_token &stoken) {
       stats_.on_sync_frame_flags(out.complete, out.aligned);
       stats_.on_sync_frame_written(true);
       const auto compute_ns = now_steady_ns() - compute_t0;
-      stats_.on_sync_tick(wake_lateness_ns, compute_ns, compute_ns > period_ns);
+      const auto age_arm_ns = arm_ok ? (tick.value - arm.stamp.value) : 0;
+      const auto age_leg_ns = leg_ok ? (tick.value - leg.stamp.value) : 0;
+      const auto age_imu_ns = imu_ok ? (tick.value - imu.stamp.value) : 0;
+      stats_.on_sync_tick(wake_lateness_ns, compute_ns, compute_ns > period_ns,
+                          arm_ok, leg_ok, imu_ok, age_arm_ns, age_leg_ns,
+                          age_imu_ns);
     }
   }
 }
