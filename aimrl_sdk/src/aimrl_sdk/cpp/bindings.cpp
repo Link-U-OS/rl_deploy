@@ -3,14 +3,11 @@
 #include <pybind11/stl.h>
 
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
-#if !defined(_WIN32)
-  #include <dlfcn.h>
-#else
-  #include <windows.h>
-#endif
+#include <dlfcn.h>
 
 #include "aimrt_transport.hpp"
 #include "core.hpp"
@@ -36,25 +33,12 @@ void init_module_dir(const py::module_ &m) {
   }
 
   if (g_module_dir.empty()) {
-#if defined(_WIN32)
-    HMODULE hm = nullptr;
-    if (GetModuleHandleExA(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCSTR>(&init_module_dir), &hm)) {
-      char path[MAX_PATH];
-      if (GetModuleFileNameA(hm, path, MAX_PATH) > 0) {
-        g_module_dir = std::filesystem::path(path).parent_path().string();
-      }
-    }
-#else
     Dl_info info;
     if (dladdr(reinterpret_cast<void *>(&init_module_dir), &info) != 0 &&
         info.dli_fname != nullptr) {
       g_module_dir =
           std::filesystem::path(info.dli_fname).parent_path().string();
     }
-#endif
   }
 }
 

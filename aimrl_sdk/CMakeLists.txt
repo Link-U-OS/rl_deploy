@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
 project(aimrl_sdk LANGUAGES CXX)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "aimrl_sdk only supports Linux (CMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}).")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

@@ -46,6 +46,8 @@ Python API（`aimrl_sdk.open()/close()` + `StateInterface/CommandInterface`）
 
 下面以在本仓库内开发为例（推荐 `uv` 管理依赖 + 构建扩展）。
 
+仅支持 Linux。
+
 ### 1) 创建环境并安装依赖/构建扩展
 
 在仓库根目录执行：

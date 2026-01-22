@@ -1,10 +1,14 @@
+import os
+import sys
+from pathlib import Path
+from typing import Any, Tuple
+
+if sys.platform != "linux":
+    raise RuntimeError(f"aimrl_sdk only supports Linux (sys.platform={sys.platform!r}).")
+
 from . import _bindings as _bindings
 from .obs import OBS as OBS
 from .obs import ObsSlices as ObsSlices
-
-import os
-from pathlib import Path
-from typing import Any, Optional, Tuple
 
 
 def _ensure_runtime_env() -> None:

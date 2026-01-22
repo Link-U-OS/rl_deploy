@@ -45,6 +45,8 @@ Key points:
 
 This section assumes you are developing inside this repository (recommended: manage deps + build extension via `uv`).
 
+Linux only.
+
 ### 1) Create environment, install deps, build extension
 
 Run at repo root:

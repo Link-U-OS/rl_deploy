@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "AIMRL C++ SDK Python bindings via pybind11"
 readme = "README.md"
 requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+]
 dependencies = [
     "numpy>=1.21",
     "loguru>=0.7.0",
@@ -27,3 +30,6 @@ build-dir = "build/{wheel_tag}"
 
 [tool.ruff]
 line-length = 120
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
