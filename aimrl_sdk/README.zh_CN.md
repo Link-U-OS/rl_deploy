@@ -48,6 +48,10 @@ Python API（`aimrl_sdk.open()/close()` + `StateInterface/CommandInterface`）
 
 仅支持 Linux。
 
+类型提示：
+- 本包会随 wheel 一起发布 pybind11 扩展的 stub：`aimrl_sdk/_bindings.pyi`。
+- 重新生成：`uv sync --extra stubs && uv run python tools/generate_pyi.py --write-to-src`。
+
 ### 1) 创建环境并安装依赖/构建扩展
 
 在仓库根目录执行：

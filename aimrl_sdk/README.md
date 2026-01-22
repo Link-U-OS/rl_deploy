@@ -47,6 +47,10 @@ This section assumes you are developing inside this repository (recommended: man
 
 Linux only.
 
+Type hints:
+- This package ships a generated stub file for the pybind11 extension: `aimrl_sdk/_bindings.pyi`.
+- To regenerate: `uv sync --extra stubs && uv run python tools/generate_pyi.py --write-to-src`.
+
 ### 1) Create environment, install deps, build extension
 
 Run at repo root:
