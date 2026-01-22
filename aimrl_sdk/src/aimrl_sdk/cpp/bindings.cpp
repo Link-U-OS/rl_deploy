@@ -63,13 +63,17 @@ std::string default_config_path() {
     return std::string(env);
   }
   if (!g_module_dir.empty()) {
-    const auto candidate = std::filesystem::path(g_module_dir) / "config" /
-                           "aimrt_ros2_backend.yaml";
-    if (std::filesystem::exists(candidate)) {
-      return candidate.string();
-    }
+    const auto cfg_dir = std::filesystem::path(g_module_dir) / "config";
+    const auto iceoryx_candidate = cfg_dir / "aimrt_iceoryx_backend.yaml";
+    if (std::filesystem::exists(iceoryx_candidate))
+      return iceoryx_candidate.string();
+
+    const auto ros2_candidate = cfg_dir / "aimrt_ros2_backend.yaml";
+    if (std::filesystem::exists(ros2_candidate))
+      return ros2_candidate.string();
   }
-  return "config/aimrt_ros2_backend.yaml";
+  // Default to iceoryx backend; ROS2 backend can be selected via AIMRL_SDK_CONFIG.
+  return "config/aimrt_iceoryx_backend.yaml";
 }
 
 std::span<const double> as_span_double(py::array &arr,

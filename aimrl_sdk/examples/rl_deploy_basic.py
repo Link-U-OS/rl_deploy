@@ -180,6 +180,19 @@ def parse_args() -> argparse.Namespace:
     default_cfg = examples_dir / "configs" / "agibot_a2_dof12.yaml"
 
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--aimrt-backend",
+        type=str,
+        default="iceoryx",
+        choices=["iceoryx", "ros2"],
+        help="Select built-in AimRT backend (default: iceoryx)",
+    )
+    p.add_argument(
+        "--aimrt-config-path",
+        type=Path,
+        default=None,
+        help="Custom AimRT backend YAML path (overrides --aimrt-backend)",
+    )
     p.add_argument("--control-hz", type=float, default=None)
     p.add_argument("--sync-hz", type=float, default=None)
     p.add_argument("--model", type=Path, default=None)
@@ -234,12 +247,19 @@ def main() -> None:
     sync_hz = float(args.sync_hz) if args.sync_hz is not None else app_cfg.sync_hz
     policy = OnnxPolicyRunner(app_cfg)
 
-    state, cmd = aimrl_sdk.open(
+    open_kwargs = dict(
         sync_hz=sync_hz,
         enable_statistics=bool(args.enable_statistics),
         statistics_sample_every=int(args.statistics_sample_every),
         statistics_ema_shift=int(args.statistics_ema_shift),
     )
+    if args.aimrt_config_path is not None:
+        state, cmd = aimrl_sdk.open(config_path=args.aimrt_config_path, **open_kwargs)
+        logger.info(f"AimRT config: {args.aimrt_config_path}")
+    else:
+        state, cmd = aimrl_sdk.open(aimrt_backend=str(args.aimrt_backend), **open_kwargs)
+        logger.info(f"AimRT backend: {args.aimrt_backend}")
+
     logger.info(f"Opened AimRL SDK successfully (sync_hz={sync_hz})")
     logger.info(f"ONNX policy: {app_cfg.model_path}")
     if args.enable_statistics:

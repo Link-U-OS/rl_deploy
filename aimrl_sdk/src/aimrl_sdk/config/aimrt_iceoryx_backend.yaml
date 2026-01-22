@@ -1,0 +1,22 @@
+aimrt:
+  plugin:
+    plugins:
+      - name: iceoryx_plugin
+        path: ${AIMRT_PLUGIN_DIR}/libaimrt_iceoryx_plugin.so
+        options:
+          node_name: aimrl_sdk
+  log:
+    core_lvl: INFO
+    backends:
+      - type: console
+
+  channel:
+    backends:
+      - type: iceoryx
+
+    pub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [iceoryx]
+    sub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [iceoryx]

@@ -66,6 +66,12 @@ if(TARGET ${AIMRT_ROS2_PLUGIN_TARGET})
   install(TARGETS ${AIMRT_ROS2_PLUGIN_TARGET} LIBRARY DESTINATION aimrl_sdk)
 endif()
 
+set(AIMRT_ICEORYX_PLUGIN_TARGET aimrt_plugins_iceoryx_plugin)
+if(TARGET ${AIMRT_ICEORYX_PLUGIN_TARGET})
+  set_target_properties(${AIMRT_ICEORYX_PLUGIN_TARGET} PROPERTIES INSTALL_RPATH "$ORIGIN")
+  install(TARGETS ${AIMRT_ICEORYX_PLUGIN_TARGET} LIBRARY DESTINATION aimrl_sdk)
+endif()
+
 set(ROS2_PLUGIN_PROTO_INSTALL_LIBS
     ros2_plugin_proto__rosidl_generator_c
     ros2_plugin_proto__rosidl_typesupport_c
