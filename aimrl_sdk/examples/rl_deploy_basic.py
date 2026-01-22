@@ -35,6 +35,21 @@ def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
     return np.array([roll, pitch, yaw], dtype=np.float32)
 
 
+def hold_joints_towards_target(cur_pos: np.ndarray, target_pos: np.ndarray, max_delta_pos: float) -> np.ndarray:
+    cur = cur_pos.astype(np.float64, copy=False).reshape(-1)
+    target = target_pos.astype(np.float64, copy=False).reshape(-1)
+    if cur.shape != target.shape:
+        raise ValueError(f"shape mismatch: cur={cur.shape} target={target.shape}")
+    if max_delta_pos <= 0.0:
+        return cur.copy()
+    delta = target - cur
+    step = np.clip(delta, -max_delta_pos, max_delta_pos)
+    print(
+        f"cur: {cur} \n target: {target} \n delta: {delta} \n step: {step} \n cur + step: {cur + step} \n max_delta_pos: {max_delta_pos}"
+    )
+    return cur + step
+
+
 class OnnxPolicyRunner:
     def __init__(self, cfg: AppCfg):
         try:
@@ -245,7 +260,13 @@ def main() -> None:
 
     dt = 1.0 / control_hz
     log_every = max(1, int(control_hz))
-    arm_zero = np.zeros(14, dtype=np.float64)
+    arm_target = np.array(app_cfg.arm_default_joint_angles, dtype=np.float64)
+    arm_stiffness_nom = np.array(app_cfg.arm_stiffness, dtype=np.float64)
+    arm_damping_nom = np.array(app_cfg.arm_damping, dtype=np.float64)
+    arm_zero_stiffness = np.zeros(aimrl_sdk.OBS.arm_dof, dtype=np.float64)
+    arm_emergency_damping = float(app_cfg.arm_emergency_damping)
+    arm_emergency_damping_arr = np.full(aimrl_sdk.OBS.arm_dof, arm_emergency_damping, dtype=np.float64)
+    arm_max_delta = float(app_cfg.arm_delta_pos_threshold)
     teleop = TeleopInput(args.joystick, init_cmd=(cmd_x, cmd_y, cmd_yaw))
     fsm = MotionFSM(app_cfg) if not args.no_fsm else None
     emergency_stop = False
@@ -291,15 +312,33 @@ def main() -> None:
             start_time = time.perf_counter()
             if fsm is not None:
                 leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
+                arm_emergency = bool(fsm.emergency_stop)
             else:
                 if emergency_stop:
                     leg_pos_des = obs[aimrl_sdk.OBS.leg_pos].astype(np.float64, copy=False)
                     leg_stiffness = np.zeros(12, dtype=np.float64)
                     leg_damping = np.array(app_cfg.leg_damping, dtype=np.float64)
+                    arm_emergency = True
                 else:
                     leg_pos_des = policy.step(obs, snap.cmd_x, snap.cmd_y, snap.cmd_yaw).astype(np.float64, copy=False)
                     leg_stiffness = np.array(app_cfg.leg_stiffness, dtype=np.float64)
                     leg_damping = np.array(app_cfg.leg_damping, dtype=np.float64)
+                    arm_emergency = False
+
+            arm_pos_cur = obs[aimrl_sdk.OBS.arm_pos].astype(np.float64, copy=False)
+            if arm_emergency:
+                arm_pos_des = arm_pos_cur
+                arm_stiffness = arm_zero_stiffness
+                arm_damping = arm_emergency_damping_arr
+            else:
+                # print(f"arm_pos_cur: {arm_pos_cur} | arm_target: {arm_target} | arm_max_delta: {arm_max_delta}")
+                arm_pos_des = hold_joints_towards_target(
+                    arm_pos_cur,
+                    arm_target,
+                    arm_max_delta,
+                )
+                arm_stiffness = arm_stiffness_nom
+                arm_damping = arm_damping_nom
             end_time = time.perf_counter()
             if loop_idx % log_every == 0:
                 if fsm is not None:
@@ -316,8 +355,9 @@ def main() -> None:
                     )
 
             # start_time = time.perf_counter()
+            # print(f"arm_pos_des: {arm_pos_des}")
             cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)
-            cmd.set_arm(position=arm_zero, stiffness=0.0, damping=0.0)
+            cmd.set_arm(position=arm_pos_des, stiffness=arm_stiffness, damping=arm_damping)
             cmd.commit(stamp_ns=stamp_ns)
             # end_time = time.perf_counter()
             # if loop_idx % log_every == 0:

@@ -45,6 +45,13 @@ class AppCfg:
     default_joint_angles: list[float] = MISSING  # -> np.ndarray(12,) in validate()
     leg_stiffness: list[float] = MISSING  # -> np.ndarray(12,) in validate()
     leg_damping: list[float] = MISSING  # -> np.ndarray(12,) in validate()
+    arm_default_joint_angles: list[float] = field(default_factory=lambda: [0.0] * 14)  # -> np.ndarray(14,)
+    arm_stiffness: list[float] = field(
+        default_factory=lambda: [100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0] * 2
+    )  # -> np.ndarray(14,)
+    arm_damping: list[float] = field(default_factory=lambda: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2] * 2)  # -> np.ndarray(14,)
+    arm_delta_pos_threshold: float = 0.05
+    arm_emergency_damping: float = 3.0
     obs_components: list[ObsComponent] = MISSING
 
     def validate(self, cfg_dir: Path, model_override: Path | None = None) -> AppCfg:
@@ -85,6 +92,17 @@ class AppCfg:
         leg_stiffness = as_floats(self.leg_stiffness, 12, "robot.leg_stiffness")
         leg_damping = as_floats(self.leg_damping, 12, "robot.leg_damping")
 
+        arm_default_joint_angles = as_floats(self.arm_default_joint_angles, 14, "robot.arm_default_joint_angles")
+        arm_stiffness = as_floats(self.arm_stiffness, 14, "robot.arm_stiffness")
+        arm_damping = as_floats(self.arm_damping, 14, "robot.arm_damping")
+
+        arm_delta_pos_threshold = float(self.arm_delta_pos_threshold)
+        arm_emergency_damping = float(self.arm_emergency_damping)
+        if arm_delta_pos_threshold < 0.0:
+            raise ValueError("robot.arm_delta_pos_threshold must be >= 0")
+        if arm_emergency_damping < 0.0:
+            raise ValueError("robot.arm_emergency_damping must be >= 0")
+
         obs_components_raw = self.obs_components
         if not isinstance(obs_components_raw, list) or not obs_components_raw:
             raise ValueError("observation.components must be a non-empty list")
@@ -120,6 +138,11 @@ class AppCfg:
             default_joint_angles=default_joint_angles,  # type: ignore[arg-type]
             leg_stiffness=leg_stiffness,  # type: ignore[arg-type]
             leg_damping=leg_damping,  # type: ignore[arg-type]
+            arm_default_joint_angles=arm_default_joint_angles,  # type: ignore[arg-type]
+            arm_stiffness=arm_stiffness,  # type: ignore[arg-type]
+            arm_damping=arm_damping,  # type: ignore[arg-type]
+            arm_delta_pos_threshold=arm_delta_pos_threshold,
+            arm_emergency_damping=arm_emergency_damping,
             obs_components=obs_components,
         )
 
@@ -140,6 +163,11 @@ class RobotCfg:
     leg_default_joint_angles: list[float] = MISSING
     leg_stiffness: list[float] = MISSING
     leg_damping: list[float] = MISSING
+    arm_default_joint_angles: list[float] = field(default_factory=lambda: [0.0] * 14)
+    arm_stiffness: list[float] = field(default_factory=lambda: [100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0] * 2)
+    arm_damping: list[float] = field(default_factory=lambda: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2] * 2)
+    arm_delta_pos_threshold: float = 0.05
+    arm_emergency_damping: float = 3.0
 
 
 @dataclass
@@ -221,6 +249,11 @@ def load_app_cfg(cfg_path: Path, model_override: Path | None = None) -> AppCfg:
         "default_joint_angles": list(cfg_obj.robot.leg_default_joint_angles),
         "leg_stiffness": list(cfg_obj.robot.leg_stiffness),
         "leg_damping": list(cfg_obj.robot.leg_damping),
+        "arm_default_joint_angles": list(cfg_obj.robot.arm_default_joint_angles),
+        "arm_stiffness": list(cfg_obj.robot.arm_stiffness),
+        "arm_damping": list(cfg_obj.robot.arm_damping),
+        "arm_delta_pos_threshold": float(cfg_obj.robot.arm_delta_pos_threshold),
+        "arm_emergency_damping": float(cfg_obj.robot.arm_emergency_damping),
         "obs_components": list(cfg_obj.observation.components),
     }
 

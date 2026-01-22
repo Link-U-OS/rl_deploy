@@ -13,6 +13,14 @@ robot:
   leg_stiffness: [55.0, 55.0, 60.0, 85.0, 25.0, 25.0, 55.0, 55.0, 60.0, 85.0, 25.0, 25.0]
   leg_damping: [5.0, 3.0, 6.0, 7.0, 0.2, 0.2, 5.0, 3.0, 6.0, 7.0, 0.2, 0.2]
 
+  # 14-DoF arm order: left(7) + right(7).
+  # The example will "hold" arms at this posture, with a per-tick max step clamp.
+  arm_default_joint_angles: [0.0, 1.31, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.31, 0.0, 0.0, 0.0, 0.0, 0.0]
+  arm_stiffness: [100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0, 100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0]
+  arm_damping: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2, 4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2]
+  arm_delta_pos_threshold: 0.05
+  arm_emergency_damping: 3.0
+
 policy:
   action_scale: 0.5
   clip_actions: 100.0
