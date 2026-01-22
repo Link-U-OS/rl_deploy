@@ -15,7 +15,7 @@ robot:
 
   # 14-DoF arm order: left(7) + right(7).
   # The example will "hold" arms at this posture, with a per-tick max step clamp.
-  arm_default_joint_angles: [0.0, 1.31, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.31, 0.0, 0.0, 0.0, 0.0, 0.0]
+  arm_default_joint_angles: [0.0, 1.35, 0.0, 0.0, 1.57, 0.0, 0.0, 0.0, -1.35, 0.0, 0.0, 1.57, 0.0, 0.0]
   arm_stiffness: [100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0, 100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0]
   arm_damping: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2, 4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2]
   arm_delta_pos_threshold: 0.05
