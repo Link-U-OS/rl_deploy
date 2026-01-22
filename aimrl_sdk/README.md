@@ -317,6 +317,10 @@ Main files under `aimrl_sdk/examples`:
 - Input sources:
   - Linux joystick: reads `/dev/input/js0` by default (override via `--joystick`)
   - Keyboard: cbreak-like mode (non-canonical + no echo, but keep normal log output)
+    - `w/s` or `↑/↓`: forward/back
+    - `a/d` or `←/→`: yaw left/right
+    - `q/e`: lateral left/right
+    - `space`: toggle deadman (gates motion), `x/ESC`: emergency stop
 - Motion FSM (simplified, semantics aligned with `deploy/rl_controllers`):
   - `DEFAULT`: not actively controlling (example uses zero stiffness or hold current)
   - `LIE` / `STAND`: transitional poses (simplified using default pose + different gains)

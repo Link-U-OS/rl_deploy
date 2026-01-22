@@ -188,22 +188,64 @@ class RawKeyboard:
             return b
 
         while self._pending:
-            # Arrow keys: ESC [ A/B/C/D
-            if self._pending[:2] == b"\x1b[":
-                seq = take(3)
-                if seq is None:
+            # Arrow keys can arrive as:
+            # - CSI: ESC [ A/B/C/D
+            # - SS3: ESC O A/B/C/D (some terminals / application cursor mode)
+            # - CSI w/ modifiers: ESC [ 1 ; 2 A  (etc.)
+            if self._pending[:1] == b"\x1b":
+                if len(self._pending) < 2:
                     break
-                if seq == b"\x1b[A":
-                    out.append("UP")
-                elif seq == b"\x1b[B":
-                    out.append("DOWN")
-                elif seq == b"\x1b[C":
-                    out.append("RIGHT")
-                elif seq == b"\x1b[D":
-                    out.append("LEFT")
-                else:
-                    out.append("ESC")
-                continue
+
+                second = self._pending[1]
+                if second == ord("O"):
+                    seq = take(3)
+                    if seq is None:
+                        break
+                    last = seq[-1:]
+                    if last == b"A":
+                        out.append("UP")
+                    elif last == b"B":
+                        out.append("DOWN")
+                    elif last == b"C":
+                        out.append("RIGHT")
+                    elif last == b"D":
+                        out.append("LEFT")
+                    else:
+                        out.append("ESC")
+                    continue
+
+                if second == ord("["):
+                    # CSI: consume until final byte (0x40..0x7E). Cap length to avoid getting stuck.
+                    max_seq_len = 16
+                    end_idx: int | None = None
+                    scan_limit = min(len(self._pending), max_seq_len)
+                    for i in range(2, scan_limit):
+                        if 0x40 <= self._pending[i] <= 0x7E:
+                            end_idx = i
+                            break
+                    if end_idx is None:
+                        if len(self._pending) < max_seq_len:
+                            break
+                        # Malformed/too-long CSI: treat as ESC and advance 1 byte.
+                        take(1)
+                        out.append("ESC")
+                        continue
+
+                    seq = take(end_idx + 1)
+                    if seq is None:
+                        break
+                    last = seq[-1:]
+                    if last == b"A":
+                        out.append("UP")
+                    elif last == b"B":
+                        out.append("DOWN")
+                    elif last == b"C":
+                        out.append("RIGHT")
+                    elif last == b"D":
+                        out.append("LEFT")
+                    else:
+                        out.append("ESC")
+                    continue
 
             b1 = take(1)
             if b1 is None:
@@ -251,7 +293,7 @@ class TeleopInput:
         self.keyboard_ok = self._kb.open()
 
         logger.info(
-            "Keyboard: w/s fwd, a/d yaw, q/e lateral, space=toggle deadman, "
+            "Keyboard: w/s or ↑/↓ fwd, a/d or ←/→ yaw, q/e lateral, space=toggle deadman, "
             "p=start, m=switch, k=walk, l=pos, x=E-stop"
         )
         if self.joystick_ok:

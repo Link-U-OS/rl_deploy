@@ -321,6 +321,10 @@ example 使用 `aimrl_sdk/examples/configs/agibot_a2_dof12.yaml` 的 schema（�
 - 输入：
   - Linux joystick：默认读 `/dev/input/js0`（可通过 `--joystick` 指定）
   - 键盘：cbreak 模式（非 canonical + 无 echo，但保持正常日志输出）
+    - `w/s` 或 `↑/↓`：前进/后退
+    - `a/d` 或 `←/→`：左/右转（yaw）
+    - `q/e`：横移（lateral）
+    - `space`：切换 deadman（门控运动），`x/ESC`：急停
 - 状态机（简化版，语义对齐 `deploy/rl_controllers`）：
   - `DEFAULT`：不主动控制（示例里为零刚度或保持当前）
   - `LIE` / `STAND`：过渡姿态（示例里用 default pose + 不同增益做简化）
