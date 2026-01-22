@@ -44,9 +44,6 @@ def hold_joints_towards_target(cur_pos: np.ndarray, target_pos: np.ndarray, max_
         return cur.copy()
     delta = target - cur
     step = np.clip(delta, -max_delta_pos, max_delta_pos)
-    print(
-        f"cur: {cur} \n target: {target} \n delta: {delta} \n step: {step} \n cur + step: {cur + step} \n max_delta_pos: {max_delta_pos}"
-    )
     return cur + step
 
 
@@ -251,9 +248,14 @@ def main() -> None:
             f"(sample_every={int(args.statistics_sample_every)}, ema_shift={int(args.statistics_ema_shift)})"
         )
 
+    stats_started = not args.enable_statistics
     while True:
         logger.info("Waiting for first aligned frame")
         stamp_ns, aligned, complete, _ = state.wait_frame(timeout_s=1.0)
+        if args.enable_statistics and (not stats_started) and complete and stamp_ns > 0:
+            state.reset_statistics()
+            stats_started = True
+            logger.info("Statistics reset; starting collection after first complete frame")
         if aligned and complete and stamp_ns > 0:
             logger.info(f"Received first aligned frame at timestamp: {stamp_ns / 1e9:.3f} s")
             break
@@ -331,7 +333,6 @@ def main() -> None:
                 arm_stiffness = arm_zero_stiffness
                 arm_damping = arm_emergency_damping_arr
             else:
-                # print(f"arm_pos_cur: {arm_pos_cur} | arm_target: {arm_target} | arm_max_delta: {arm_max_delta}")
                 arm_pos_des = hold_joints_towards_target(
                     arm_pos_cur,
                     arm_target,
@@ -355,7 +356,6 @@ def main() -> None:
                     )
 
             # start_time = time.perf_counter()
-            # print(f"arm_pos_des: {arm_pos_des}")
             cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)
             cmd.set_arm(position=arm_pos_des, stiffness=arm_stiffness, damping=arm_damping)
             cmd.commit(stamp_ns=stamp_ns)
