@@ -29,22 +29,22 @@ aimrt:
       - type: iceoryx
     sub_topics_options:
       - topic_name: "(.*)"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
     pub_topics_options:
       - topic_name: "/body_drive/leg_joint_state"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
       - topic_name: "/body_drive/arm_joint_state"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
       - topic_name: "/body_drive/neck_joint_state"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
       - topic_name: "/body_drive/hand_joint_state"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
       - topic_name: "/body_drive/imu/data"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
       - topic_name: "/body_drive/foot_sensor_state"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
       - topic_name: "/tf"
-        enable_backends: [ros2]
+        enable_backends: [iceoryx]
   module:
     pkgs:
       - path: libmujoco_sim_pkg.so

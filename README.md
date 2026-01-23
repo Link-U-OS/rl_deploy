@@ -298,7 +298,7 @@ docker run -it \
   --pid=host \
   -e DISPLAY=$DISPLAY \
   -v /dev/input:/dev/input \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /tmp:/tmp \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro \
   -v .:/home/agi/a2_deploy_workspace \
   -d a2-deploy-image
@@ -318,7 +318,7 @@ docker run -it \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -v /dev/input:/dev/input \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /tmp:/tmp \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro \
   -v .:/home/agi/a2_deploy_workspace \
   -d a2-deploy-image
@@ -398,12 +398,12 @@ Please read the following content carefully to ensure you understand the control
 
 1. Press the "start" button on the controller to enter the startup mode
    - The terminal inside the container on the robot should display "start control"
-   
+
 ![](./images/diagram-6.png)
 
 2. Press the "LB" and "A" buttons simultaneously on the controller to enter the position control mode
    - The terminal inside the container on the robot should display "lie2stand"
-   
+
 ![](./images/diagram-2.png)
 
 <font color="red">At this point, place the robot on the ground, ensuring both feet are on the ground, and support the robot to maintain balance, ensuring the suspension rope is slack</font>

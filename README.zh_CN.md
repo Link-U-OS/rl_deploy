@@ -298,7 +298,7 @@ docker run -it \
   --pid=host \
   -e DISPLAY=$DISPLAY \
   -v /dev/input:/dev/input \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /tmp:/tmp \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro \
   -v .:/home/agi/a2_deploy_workspace \
   -d a2-deploy-image
@@ -318,7 +318,7 @@ docker run -it \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -v /dev/input:/dev/input \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /tmp:/tmp \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro \
   -v .:/home/agi/a2_deploy_workspace \
   -d a2-deploy-image
@@ -398,12 +398,12 @@ python3 install/deploy_assets/scripts/joy_interface.py
 
 1. 按下手柄“start”键机器人进入启动模式
 	- 机上的容器内终端，应显示“start control”字样
-  
+
 ![](./images/diagram-6.png)
 
 2. 同时按下手柄“LB”和“A”键机器人进入位控模式
 	- 机上的容器内终端，应显示“lie2stand”字样
-  
+
 ![](./images/diagram-2.png)
 
 <font color="red">此时放下机器人，确保机器人双脚落地，搀扶机器人使其保持平衡，确保吊绳松弛</font>
