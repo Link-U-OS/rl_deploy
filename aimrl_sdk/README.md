@@ -2,7 +2,7 @@ English | [中文](README.zh_CN.md)
 
 # AimRL SDK (Python)
 
-`aimrl_sdk` is a Python SDK (pybind11 bindings) designed for an **AIMRT + ROS2 backend**. It provides:
+`aimrl_sdk` is a Python SDK (pybind11 bindings) designed for an **AIMRT + iceoryx backend**. It provides:
 - streaming observation frames (arm/leg/imu) and generating “aligned frames” (timestamp alignment + `aligned/complete` flags)
 - sending joint commands (arm/leg `position/velocity/effort/Kp/Kd`)
 - A2 closed-chain ankle conversion (toe A/B ↔ ankle pitch/roll) on both the **observation** and **command** sides

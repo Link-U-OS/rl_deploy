@@ -8,12 +8,68 @@ This project is the Link U OS Raise A2 motion control program, which includes th
 
 ```
 .
+├── aimrl_sdk           # AimRL Python SDK (pybind11 bindings; obs/command streaming & Python-side policy)
 ├── deploy              # Motion control program based on ros2_control
 ├── dockerfile          # Dockerfile for simulation
 ├── images              # Images used in the documentation
 ├── joy_interface.py    # Virtual joystick
 ├── mujoco_sim          # Simulation environment based on aimrt_mujoco_sim
 └── README.md           # Documentation
+```
+
+### 1.1 `aimrl_sdk` (Python) development & deployment notes
+
+`aimrl_sdk` is a Python SDK (pybind11 bindings) for an **AIMRT + iceoryx backend**. It is commonly used to:
+- stream observation frames from `/body_drive/*` (arm/leg/imu)
+- generate aligned frames with `(aligned, complete)` flags
+- publish joint commands (arm/leg JointCommand), enabling Python-side policy deployment/debugging
+
+#### Requirements
+
+- Linux
+- Python >= 3.10 (see `aimrl_sdk/pyproject.toml`)
+- Recommended: `uv` for dependency management and building the local extension
+
+#### Quick start (uv)
+
+From the repository root:
+
+```bash
+cd aimrl_sdk
+uv sync
+uv run python examples/rl_deploy_basic.py --cfg examples/configs/agibot_a2_dof12.yaml
+```
+
+Or run from the repository root without `cd`:
+
+```bash
+uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg aimrl_sdk/examples/configs/agibot_a2_dof12.yaml
+```
+
+#### Select backend config (iceoryx / ROS2)
+
+`aimrl_sdk.open()` will prefer the AimRT backend YAML specified by `AIMRL_SDK_CONFIG`. If not set, it falls back to the built-in default (iceoryx backend).
+
+Example (iceoryx backend):
+
+```bash
+export AIMRL_SDK_CONFIG=$PWD/aimrl_sdk/src/aimrl_sdk/config/aimrt_iceoryx_backend.yaml
+```
+
+Example (ROS2 backend):
+
+```bash
+export AIMRL_SDK_CONFIG=$PWD/aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml
+```
+
+#### Type stubs (optional)
+
+This repo ships a generated stub file for the pybind11 extension (`aimrl_sdk/_bindings.pyi`). To regenerate:
+
+```bash
+cd aimrl_sdk
+uv sync --extra stubs
+uv run python tools/generate_pyi.py --write-to-src
 ```
 
 ## II. Basic Concepts

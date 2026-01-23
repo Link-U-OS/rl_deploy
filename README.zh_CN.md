@@ -8,12 +8,68 @@
 
 ```
 .
+├── aimrl_sdk           # AimRL Python SDK（pybind11 绑定；观测/命令拉流 + Python 侧策略部署/调试）
 ├── deploy              # 基于 ros2_control 的运动控制程序
 ├── dockerfile          # 用于仿真的 Dockerfile
 ├── images              # 文档中使用的图片
 ├── joy_interface.py    # 虚拟手柄
 ├── mujoco_sim          # 基于 aimrt_mujoco_sim 的仿真环境
 └── README.md           # 说明文档
+```
+
+### 1.1 `aimrl_sdk`（Python）开发与部署说明
+
+`aimrl_sdk` 是面向 **AIMRT + iceoryx 通信后端** 的 Python SDK（pybind11 绑定）。常见用途包括：
+- 从 `/body_drive/*` 拉取观测帧（arm/leg/imu）
+- 生成带 `(aligned, complete)` 标记的对齐帧
+- 发布关节命令（arm/leg JointCommand），用于 Python 侧策略部署/调试
+
+#### 环境要求
+
+- Linux
+- Python >= 3.10（见 `aimrl_sdk/pyproject.toml`）
+- 推荐使用 `uv` 管理依赖并构建本地扩展
+
+#### 快速开始（uv）
+
+在仓库根目录执行：
+
+```bash
+cd aimrl_sdk
+uv sync
+uv run python examples/rl_deploy_basic.py --cfg examples/configs/agibot_a2_dof12.yaml
+```
+
+也可以在仓库根目录直接运行：
+
+```bash
+uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg aimrl_sdk/examples/configs/agibot_a2_dof12.yaml
+```
+
+#### 选择后端配置（iceoryx / ROS2）
+
+`aimrl_sdk.open()` 会优先读取环境变量 `AIMRL_SDK_CONFIG` 指向的 AimRT 后端 YAML；未设置时回落到内置默认配置（iceoryx 后端）。
+
+例如（iceoryx 后端）：
+
+```bash
+export AIMRL_SDK_CONFIG=$PWD/aimrl_sdk/src/aimrl_sdk/config/aimrt_iceoryx_backend.yaml
+```
+
+例如（ROS2 后端）：
+
+```bash
+export AIMRL_SDK_CONFIG=$PWD/aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml
+```
+
+#### 类型提示（可选）
+
+仓库内包含 pybind11 扩展的 stub（`aimrl_sdk/_bindings.pyi`）。如需重新生成：
+
+```bash
+cd aimrl_sdk
+uv sync --extra stubs
+uv run python tools/generate_pyi.py --write-to-src
 ```
 
 ## 二、基本概念
