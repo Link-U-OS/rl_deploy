@@ -15,6 +15,26 @@ from rl_deploy_config import AppCfg, component_dim, load_app_cfg
 from teleop_control import MotionFSM, TeleopInput
 
 
+def sleep_until(deadline_s: float, *, spin_threshold_s: float = 0.002) -> None:
+    """Sleep until an absolute perf_counter() deadline.
+
+    Uses coarse sleep first, then (optionally) a short busy-wait to reduce oversleep.
+    """
+    while True:
+        now = time.perf_counter()
+        remaining = deadline_s - now
+        if remaining <= 0.0:
+            return
+
+        if remaining > spin_threshold_s:
+            time.sleep(max(0.0, remaining - spin_threshold_s))
+            continue
+
+        while time.perf_counter() < deadline_s:
+            pass
+        return
+
+
 def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
     x, y, z, w = [float(v) for v in q_xyzw]
 
@@ -298,6 +318,7 @@ def main() -> None:
         loop_idx = 0
         last_aligned = True
         last_align_warn_t = 0.0
+        next_deadline = time.perf_counter()
         while True:
             loop_idx += 1
             stamp_ns, aligned, complete, obs = state.latest_frame()
@@ -458,7 +479,11 @@ def main() -> None:
                         f"      unaligned   : {int(sync.get('frame_unaligned_skew', 0)):,} (skew)\n"
                         f"    wait_frame    : ok {int(wait_frame.get('ok', 0)):,} | timeout {int(wait_frame.get('timeout', 0)):,} | stopped {int(wait_frame.get('stopped', 0)):,}",
                     )
-            time.sleep(dt)
+            next_deadline += dt
+            now = time.perf_counter()
+            if (now - next_deadline) > dt:
+                next_deadline = now
+            sleep_until(next_deadline)
 
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt")
