@@ -13,6 +13,7 @@ from loguru import logger
 import aimrl_sdk
 from rl_deploy_config import AppCfg, component_dim, load_app_cfg
 from teleop_control import MotionFSM, TeleopInput
+from telemetry import FrameCaptureThread, Telemetry, TelemetryConfig
 
 
 def sleep_until(deadline_s: float, *, spin_threshold_s: float = 0.002) -> None:
@@ -245,6 +246,43 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Log statistics snapshot every N seconds (0 disables, default: 0)",
     )
+    p.add_argument(
+        "--telemetry",
+        type=str,
+        default="off",
+        choices=["off", "live", "record"],
+        help="Telemetry mode: off|live|record (default: off)",
+    )
+    p.add_argument(
+        "--telemetry-path",
+        type=Path,
+        default=Path("log"),
+        help="Recording output path (directory or .mcap file) for telemetry=record (default: ./log)",
+    )
+    p.add_argument(
+        "--telemetry-host",
+        type=str,
+        default="0.0.0.0",
+        help="Foxglove live server bind host for telemetry=live (default: 0.0.0.0)",
+    )
+    p.add_argument(
+        "--telemetry-port",
+        type=int,
+        default=8765,
+        help="Foxglove live WebSocket port for telemetry=live (default: 8765)",
+    )
+    p.add_argument(
+        "--telemetry-live-hz",
+        type=float,
+        default=20.0,
+        help="Downsample rate for telemetry=live (Hz, default: 20)",
+    )
+    p.add_argument(
+        "--telemetry-queue",
+        type=int,
+        default=2000,
+        help="Telemetry queue size (default: 2000). When full, drops oldest messages.",
+    )
     return p.parse_args()
 
 
@@ -299,6 +337,34 @@ def main() -> None:
         if aligned and complete and stamp_ns > 0:
             logger.info(f"Received first aligned frame at timestamp: {stamp_ns / 1e9:.3f} s")
             break
+
+    telemetry_mode = str(args.telemetry).strip().lower()
+    telemetry_cfg = TelemetryConfig(
+        mode=telemetry_mode,
+        record_mcap=args.telemetry_path if telemetry_mode == "record" else None,
+        foxglove_host=str(args.telemetry_host),
+        foxglove_port=int(args.telemetry_port) if telemetry_mode == "live" else None,
+        foxglove_live_hz=float(args.telemetry_live_hz),
+        queue_size=int(args.telemetry_queue),
+    )
+    telemetry_enabled = telemetry_mode != "off"
+    telemetry = None
+    frame_capture = None
+    if telemetry_enabled:
+        telemetry = Telemetry(
+            telemetry_cfg,
+            metadata={
+                "aimrt_backend": str(args.aimrt_backend),
+                "aimrt_config_path": str(args.aimrt_config_path) if args.aimrt_config_path is not None else "",
+                "cfg_path": str(args.cfg),
+                "model_path": str(app_cfg.model_path),
+                "control_hz": f"{control_hz:.6f}",
+                "sync_hz": f"{sync_hz:.6f}",
+            },
+        )
+        telemetry.start()
+        frame_capture = FrameCaptureThread(state, telemetry, timeout_s=1.0)
+        frame_capture.start()
 
     dt = 1.0 / control_hz
     log_every = max(1, int(control_hz))
@@ -397,6 +463,16 @@ def main() -> None:
                     )
 
             # start_time = time.perf_counter()
+            if telemetry is not None:
+                telemetry.push_cmd(
+                    stamp_ns=int(stamp_ns),
+                    arm_position=arm_pos_des,
+                    arm_stiffness=arm_stiffness,
+                    arm_damping=arm_damping,
+                    leg_position=leg_pos_des,
+                    leg_stiffness=leg_stiffness,
+                    leg_damping=leg_damping,
+                )
             cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)
             cmd.set_arm(position=arm_pos_des, stiffness=arm_stiffness, damping=arm_damping)
             cmd.commit(stamp_ns=stamp_ns)
@@ -488,6 +564,10 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt")
     finally:
+        if frame_capture is not None:
+            frame_capture.close()
+        if telemetry is not None:
+            telemetry.close()
         teleop.close()
         aimrl_sdk.close(state)
 
