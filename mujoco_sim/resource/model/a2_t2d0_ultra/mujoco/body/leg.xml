@@ -1,26 +1,26 @@
 <?xml version='1.0' encoding='utf-8'?>
 <mujoco model="body_leg">
     <body name = "left_hip_roll" pos = "-0.0808 0.105 -0.0652" euler = "0.7854 0 1.5707963">
-        <inertial pos = "0.00011252 0.02130615 -0.07465143" mass = "2.39059365"
-                fullinertia = "0.00381223 0.00368166 0.00334373 -0.00000253 0.00000433 0.00019809" />
+        <inertial pos = "-0.00005 0.02144 -0.06458" mass = "2.3646"
+                fullinertia = "0.0037046 0.0035999 0.0032147 0.0000048 0.0000041 0.0001852" />
         <joint name = "idx01_left_hip_roll" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-0.698 0.698" />
         <geom type = 'mesh' mesh = 'left-hip-roll' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
             
         <body name = "left_hip_yaw" pos = "0 -0.017 -0.0682" euler = "1.5707963 -1.5707963 0">
-            <inertial pos = "-0.00012288 0.01576460 0.1082870" mass = "3.79911511" 
-                    fullinertia = "0.00941292 0.01442888 0.00698406 0.00000766 0.00000238 -0.00055185" />
+            <inertial pos = "0.00003 0.01291 0.10977" mass = "3.7387" 
+                    fullinertia = "0.0092390 0.0147804 0.0071038 -0.0000010 -0.0000017 -0.0003888" />
             <joint name = "idx02_left_hip_yaw" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-1.5707963 1.5707963" />
             <geom type = 'mesh' mesh = 'left-hip-yaw' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
 
             <body name = "left_hip_pitch" pos = "0 -0.020 0.1205" euler = "1.5707963 0.7854 0">
-                <inertial pos = "-0.06943423 0.00469099 0.02228242" mass = "5.92461880"
-                        fullinertia = "0.01406779 0.08875802 0.09356940 0.00370132 -0.00808512 0.00067639" />
+                <inertial pos = "-0.07190 0.00657 0.01835" mass = "6.2946"
+                        fullinertia = "0.0144573 0.0962715 0.1022428 0.0048430 -0.0075696 0.0008681" />
                 <joint name = "idx03_left_hip_pitch" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-1.919862144 0.78539815" />
                 <geom type = 'mesh' mesh = 'left-hip-pitch' pos = '0 0 0' euler = '-0 0 -0' material = "metalic silver" />
 
                 <body name = "left_tarsus" pos = "-0.34 0 0" euler = "0 0 0">
-                    <inertial pos = "-0.17711952 0.00417209 0.00013325" mass = "3.02166726"
-                            fullinertia = "0.00286094 0.02537518 0.02674320 -0.00112212 0.00004708 0.00001928" />
+                    <inertial pos = "-0.18220 -0.00026 -0.00002" mass = "3.3145"
+                            fullinertia = "0.0041368 0.0279771 0.0299974 -0.0023206 0.0007601 -0.0000438" />
                     <joint name = "idx04_left_tarsus" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-0.087266461 2.443460911" />
                     <geom type = 'mesh' mesh = 'left-knee' pos = '0 0 0' euler = '-0 0 -0' material = "metalic silver" />
 
@@ -54,14 +54,14 @@
 
 
                     <body name = "left_toe_pitch" pos = "-0.377 0 0" euler = "0 0 0">
-                        <inertial pos = "0 0 0" mass = "0.08772028"
-                                fullinertia = "0.00001572 0.00001128 0.00001148 0.0 0.0 0.0" />
+                        <inertial pos = "0.00003 0.0 -0.00093" mass = "0.0699"
+                                fullinertia = "0.0000133 0.0000158 0.0000068 0.0 0.0 0.0" />
                         <joint name = "idx05_left_toe_pitch" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-1.047197533 0.523598767" />
                         <geom type = 'mesh' mesh = 'left-toe-pitch' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
 
                         <body name = "left_toe_roll" pos = "0 0 0" euler = "-1.5707963 0 0">
-                            <inertial pos = "-0.03898340 0.00002335 0.03167314" mass = "1.21058213"
-                                    fullinertia = "0.00701152 0.00653210 0.00112114 0.00000021 0.00015476 -0.00000270" />
+                            <inertial pos = "-0.03941 -0.00020 0.02378" mass = "1.2068"
+                                    fullinertia = "0.0070652 0.0066579 0.0010250 0.0 0.0003185 0.0" />
                             <joint name = "idx06_left_toe_roll" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-0.488692182 0.488692182" />
                             <geom type = 'mesh' mesh = 'left-toe-roll' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
                             <geom type = "sphere" size = "0.002" pos = "-0.059 0 0.175" class = "collision"  />
@@ -83,26 +83,26 @@
 
 
     <body name = "right_hip_roll" pos = "-0.0808 -0.105 -0.0652" euler = "0.7854 0 1.5707963">
-        <inertial pos = "-0.00011252 0.02130615 -0.07465143" mass = "2.39059365"
-                fullinertia = "0.00381223 0.00368166 0.00334373 0.00000253 -0.00000433 0.00019809" />
+        <inertial pos = "0.00002 0.02144 -0.06453" mass = "2.3646"
+                fullinertia = "0.0037035 0.0035991 0.0032150 -0.0000046 -0.0000055 0.0001810" />
         <joint name = "idx07_right_hip_roll" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-0.698 0.698" />
         <geom type = 'mesh' mesh = 'right-hip-roll' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
 
         <body name = "right_hip_yaw" pos = "0 -0.017 -0.0682" euler = "1.5707963 -1.5707963 0">
-            <inertial pos = "-0.00012288 -0.01576460 0.10828703" mass = "3.79911511"
-                    fullinertia = "0.00941292 0.01442888 0.00698406 -0.00000766 0.00000238 0.00055185" />
+            <inertial pos = "0.00001 -0.01291 0.10977" mass = "3.7387"
+                    fullinertia = "0.0092390 0.0147804 0.0071038 -0.0000010 0.0000017 0.0003888" />
             <joint name = "idx08_right_hip_yaw" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-1.5707963 1.5707963" />
             <geom type = 'mesh' mesh = 'right-hip-yaw' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
             
             <body name = "right_hip_pitch" pos = "0 0.020 0.1205" euler = "1.5707963 0.7854 0">
-                <inertial pos = "-0.06943423 0.00469099 -0.02228242" mass = "5.92461880"
-                        fullinertia = "0.01406779 0.08875802 0.09356940 0.00370132 0.00808512 -0.00067639" />
+                <inertial pos = "-0.07029 0.00700 -0.01828" mass = "6.2850"
+                        fullinertia = "0.0146812 0.0942134 0.1003721 0.0047367 0.0076334 -0.0009145" />
                 <joint name = "idx09_right_hip_pitch" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-1.919862144 0.78539815" />
                 <geom type = 'mesh' mesh = 'right-hip-pitch' pos = '0 0 0' euler = '-0 0 -0' material = "metalic silver"/>
 
                 <body name = "right_tarsus" pos = "-0.34 0 0" euler = "0 0 0">
-                    <inertial pos = "-0.17711952 0.00417209 -0.00013325" mass = "3.02166726"
-                            fullinertia = "0.00286094 0.02537518 0.02674320 -0.00112212 -0.00004708 -0.00001928" />
+                    <inertial pos = "-0.18216 -0.00054 0.00049" mass = "3.3127"
+                            fullinertia = "0.0040887 0.0279331 0.0299061 -0.0022629 -0.0007574 0.0000435" />
                     <joint name = "idx10_right_tarsus" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-0.087266461 2.443460911" />
                     <geom type = 'mesh' mesh = 'right-knee' pos = '0 0 0' euler = '-0 0 -0' material = "metalic silver" />
 
@@ -135,14 +135,14 @@
                     </body>
 
                     <body name = "right_toe_pitch" pos = "-0.377 0 0" euler = "0 0 0">
-                        <inertial pos = "0 0 0" mass = "0.08772028"
-                                fullinertia = "0.00001572 0.00001128 0.00001148 0.0 0.0 0.0" />
+                        <inertial pos = "0.00003 0.0 0.00217" mass = "0.0699"
+                                fullinertia = "0.0000133 0.0000158 0.0000068 -0.0000003 0.0 0.0" />
                         <joint name = "idx11_right_toe_pitch" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-1.047197533 0.523598767" />
                         <geom type = 'mesh' mesh = 'right-toe-pitch' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
 
                         <body name = "right_toe_roll" pos = "0 0 0" euler = "-1.5707963 0 0">
-                            <inertial pos = "-0.03898340 -0.00002335 0.03167314" mass = "1.21058213"
-                                    fullinertia = "0.00701152 0.00653210 0.00112114 -0.00000021 0.00015476 0.00000270" />
+                            <inertial pos = "-0.03940 -0.00055 0.02378" mass = "1.2068"
+                                    fullinertia = "0.0070652 0.0066581 0.0010252 0.0 0.0003184 0.0" />
                             <joint name = "idx12_right_toe_roll" type = 'hinge' pos = "0 0 0" axis = "0 0 1" damping = '1' limited = "true" range = "-0.488692182 0.488692182" />
                             <geom type = 'mesh' mesh = 'right-toe-roll' pos = '0 0 0' euler = '-0 0 -0' material = "metalic black" />
                             <geom type = "sphere" size = "0.002" pos = "-0.059 0 0.175" class = "collision"  />
