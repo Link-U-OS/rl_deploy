@@ -1,0 +1,181 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    rl_controllers:
+      type: legged/AcController
+
+rl_controllers:
+  ros__parameters:
+    joints:
+      - idx01_left_hip_roll
+      - idx02_left_hip_yaw
+      - idx03_left_hip_pitch
+      - idx04_left_tarsus
+      - idx05_left_toe_pitch
+      - idx06_left_toe_roll
+      - idx07_right_hip_roll
+      - idx08_right_hip_yaw
+      - idx09_right_hip_pitch
+      - idx10_right_tarsus
+      - idx11_right_toe_pitch
+      - idx12_right_toe_roll
+      - idx13_left_arm_joint1
+      - idx14_left_arm_joint2
+      - idx15_left_arm_joint3
+      - idx16_left_arm_joint4
+      - idx17_left_arm_joint5
+      - idx18_left_arm_joint6
+      - idx19_left_arm_joint7
+      - idx20_right_arm_joint1
+      - idx21_right_arm_joint2
+      - idx22_right_arm_joint3
+      - idx23_right_arm_joint4
+      - idx24_right_arm_joint5
+      - idx25_right_arm_joint6
+      - idx26_right_arm_joint7
+
+    command_interfaces:
+      - position
+      - velocity
+      - effort
+      - Kp
+      - Kd
+    state_interfaces:
+      - position
+      - velocity
+      - effort
+
+    policyFile: policy/A2/yanzheng50000_ckpt35000.onnx
+
+    LeggedRobotCfg:
+      init_state:
+        # target angles [rad] when action = 0.0
+        default_joint_angle:
+          idx01_left_hip_roll: 0.0
+          idx02_left_hip_yaw: 0.0
+          idx03_left_hip_pitch: -0.115
+          idx04_left_tarsus: 0.267
+          idx05_left_toe_pitch: -0.152
+          idx06_left_toe_roll: 0.0
+          idx07_right_hip_roll: 0.0
+          idx08_right_hip_yaw: 0.0
+          idx09_right_hip_pitch: -0.115
+          idx10_right_tarsus: 0.267
+          idx11_right_toe_pitch: -0.152
+          idx12_right_toe_roll: 0.0
+
+        default_arm_joint_angle:
+          idx13_left_arm_joint1: 0.0
+          idx14_left_arm_joint2: 1.31
+          idx15_left_arm_joint3 : 0.0
+          idx16_left_arm_joint4 : 0.0
+          idx17_left_arm_joint5 : 0.0
+          idx18_left_arm_joint6 : 0.0
+          idx19_left_arm_joint7 : 0.0
+          idx20_right_arm_joint1 : 0.0
+          idx21_right_arm_joint2 : -1.31
+          idx22_right_arm_joint3 : 0.0
+          idx23_right_arm_joint4 : 0.0
+          idx24_right_arm_joint5 : 0.0
+          idx25_right_arm_joint6 : 0.0
+          idx26_right_arm_joint7 : 0.0
+
+      control:
+        # PD Drive parameters:
+        stiffness:
+          idx01_left_hip_roll: 130.0
+          idx02_left_hip_yaw: 130.0
+          idx03_left_hip_pitch: 200.0
+          idx04_left_tarsus: 220.0
+          idx05_left_toe_pitch: 50.0
+          idx06_left_toe_roll: 50.0
+          idx07_right_hip_roll: 130.0
+          idx08_right_hip_yaw: 130.0
+          idx09_right_hip_pitch: 200.0
+          idx10_right_tarsus: 220.0
+          idx11_right_toe_pitch: 50.0
+          idx12_right_toe_roll: 50.0
+          idx13_left_arm_joint1: 100.
+          idx14_left_arm_joint2: 200.
+          idx15_left_arm_joint3 : 200.
+          idx16_left_arm_joint4 : 100.
+          idx17_left_arm_joint5 : 200.
+          idx18_left_arm_joint6 : 200.
+          idx19_left_arm_joint7 : 200.
+          idx20_right_arm_joint1 : 100.
+          idx21_right_arm_joint2 : 200.
+          idx22_right_arm_joint3 : 200.
+          idx23_right_arm_joint4 : 100.
+          idx24_right_arm_joint5 : 200.
+          idx25_right_arm_joint6 : 200.
+          idx26_right_arm_joint7 : 200.
+
+        damping:
+          idx01_left_hip_roll: 5.0
+          idx02_left_hip_yaw: 3.0
+          idx03_left_hip_pitch: 6.0
+          idx04_left_tarsus: 7.0
+          idx05_left_toe_pitch: 1.5
+          idx06_left_toe_roll: 1.5
+          idx07_right_hip_roll: 5.0
+          idx08_right_hip_yaw: 3.0
+          idx09_right_hip_pitch: 6.0
+          idx10_right_tarsus: 7.0
+          idx11_right_toe_pitch: 1.5
+          idx12_right_toe_roll: 1.5
+          idx13_left_arm_joint1: 4.0
+          idx14_left_arm_joint2: 0.2
+          idx15_left_arm_joint3 : 0.2
+          idx16_left_arm_joint4 : 4.0
+          idx17_left_arm_joint5 : 0.2
+          idx18_left_arm_joint6 : 0.2
+          idx19_left_arm_joint7 : 0.2
+          idx20_right_arm_joint1 : 4.0
+          idx21_right_arm_joint2 : 0.2
+          idx22_right_arm_joint3 : 0.2
+          idx23_right_arm_joint4 : 4.0
+          idx24_right_arm_joint5 : 0.2
+          idx25_right_arm_joint6 : 0.2
+          idx26_right_arm_joint7 : 0.2
+
+        action_scale: 0.5
+        decimation: 10
+        cycle_time: 1.0
+
+      normalization:
+        clip_scales:
+          clip_observations: 100.
+          clip_actions: 100.
+        obs_scales:
+          lin_vel: 2.0
+          ang_vel: 1.
+          dof_pos: 1.0
+          dof_vel: 0.05
+          quat: 1.
+          height_measurements: 5.0
+
+      size:
+        actions_size: 12
+        observations_size: 47
+        num_hist: 66
+
+      mode:
+        sw_mode: True
+        cmd_threshold: 0.05
+
+    init_pos_control:
+      lie_kp_large: 50.0
+      lie_kd_large: 0.1
+
+      lie_kp_ankle: 30.0
+      lie_kd_ankle: 0.1
+
+      stance_kp_large: 100.0
+      stance_kd_large: 0.1
+
+      stance_kp_ankle: 40.0
+      stance_kd_ankle: 0.1
