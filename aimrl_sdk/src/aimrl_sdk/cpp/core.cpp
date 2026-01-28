@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "layout.hpp"
 
@@ -23,6 +24,84 @@ static std::int64_t now_steady_ns() {
   using namespace std::chrono;
   return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
       .count();
+}
+
+static std::int64_t positive_mod(std::int64_t x, std::int64_t m) {
+  if (m <= 0)
+    return 0;
+  auto r = x % m;
+  if (r < 0)
+    r += m;
+  return r;
+}
+
+static std::int64_t estimate_phase_from_imu(
+    const RingBuffer<ImuSample> &ring, std::int64_t period_ns,
+    const std::stop_token &stoken, const std::function<bool()> &running) {
+  if (period_ns <= 0)
+    return 0;
+
+  constexpr int kTargetSamples = 50;
+  constexpr std::int64_t kMaxWaitNs = 500'000'000;  // 0.5s
+  constexpr std::int64_t kBinNs = 100'000;          // 0.1ms bins
+
+  std::vector<std::int64_t> phases;
+  phases.reserve(kTargetSamples);
+
+  std::int64_t last_stamp = 0;
+  const auto t0 = now_system_ns().value;
+
+  while (!stoken.stop_requested() && running() &&
+         static_cast<int>(phases.size()) < kTargetSamples) {
+    if ((now_system_ns().value - t0) > kMaxWaitNs)
+      break;
+
+    const auto idx = ring.latest_index();
+    if (idx > 0) {
+      ImuSample imu{};
+      if (ring.read_at(idx, imu) && imu.stamp.value > 0 &&
+          imu.stamp.value != last_stamp) {
+        last_stamp = imu.stamp.value;
+        phases.push_back(positive_mod(imu.stamp.value, period_ns));
+      }
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  if (phases.empty())
+    return 0;
+
+  const auto bins = static_cast<int>((period_ns + kBinNs - 1) / kBinNs);
+  std::vector<int> hist(static_cast<std::size_t>(std::max(1, bins)), 0);
+  for (const auto p : phases) {
+    const auto b = static_cast<int>(std::clamp<std::int64_t>(p / kBinNs, 0, bins - 1));
+    hist[static_cast<std::size_t>(b)] += 1;
+  }
+
+  int best_bin = 0;
+  int best_count = hist[0];
+  for (int b = 1; b < bins; ++b) {
+    if (hist[static_cast<std::size_t>(b)] > best_count) {
+      best_count = hist[static_cast<std::size_t>(b)];
+      best_bin = b;
+    }
+  }
+
+  const auto lo = static_cast<std::int64_t>(best_bin) * kBinNs;
+  const auto hi = std::min(period_ns, lo + kBinNs);
+  std::vector<std::int64_t> in_bin;
+  in_bin.reserve(phases.size());
+  for (const auto p : phases) {
+    if (p >= lo && p < hi)
+      in_bin.push_back(p);
+  }
+  if (in_bin.empty())
+    return std::clamp<std::int64_t>(lo + kBinNs / 2, 0, period_ns - 1);
+
+  std::nth_element(in_bin.begin(), in_bin.begin() + in_bin.size() / 2, in_bin.end());
+  const auto med = in_bin[in_bin.size() / 2];
+  return std::clamp<std::int64_t>(med, 0, period_ns - 1);
 }
 
 Core::Core(Options opt, std::unique_ptr<Transport> transport)
@@ -348,8 +427,23 @@ void apply_closed_ankle_state_(JointSample<kLegDof> &leg,
 void Core::sync_loop_(const std::stop_token &stoken) {
   const auto period_ns = static_cast<std::int64_t>(1e9 / opt_.sync.frame_hz);
 
+  auto phase_ns = opt_.sync.phase_ns;
+  if (phase_ns < 0) {
+    // Auto-align tick phase to IMU timestamp phase to reduce systematic IMU age.
+    phase_ns = estimate_phase_from_imu(
+        imu_raw_, period_ns, stoken, [this] { return this->running(); });
+  } else if (period_ns > 0 && phase_ns >= period_ns) {
+    phase_ns = phase_ns % period_ns;
+  }
+  if (phase_ns < 0)
+    phase_ns = 0;
+
+  // schedule ticks at: k*period + phase
   auto next = now_system_ns();
-  next.value = (next.value / period_ns + 1) * period_ns;
+  next.value = (next.value / period_ns + 1) * period_ns + phase_ns;
+  if (next.value <= now_system_ns().value) {
+    next.value += period_ns;
+  }
 
   std::array<float, kFrameDim> last_x{};
 

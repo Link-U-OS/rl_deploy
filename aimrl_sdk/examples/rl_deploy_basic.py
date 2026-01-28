@@ -216,6 +216,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--control-hz", type=float, default=None)
     p.add_argument("--sync-hz", type=float, default=None)
+    p.add_argument(
+        "--sync-phase-ms",
+        type=float,
+        default=-1.0,
+        help="Sync tick phase offset in milliseconds (advanced). <0 enables auto phase estimation from IMU stamps (default: -1).",
+    )
     p.add_argument("--model", type=Path, default=None)
     p.add_argument("--cfg", type=Path, default=default_cfg)
     p.add_argument("--cmd-x", type=float, default=0.0, help="initial command x (forward)")
@@ -307,6 +313,7 @@ def main() -> None:
 
     open_kwargs = dict(
         sync_hz=sync_hz,
+        sync_phase_ms=float(args.sync_phase_ms),
         enable_statistics=bool(args.enable_statistics),
         statistics_sample_every=int(args.statistics_sample_every),
         statistics_ema_shift=int(args.statistics_ema_shift),
@@ -526,6 +533,11 @@ def main() -> None:
                     sync = s.get("sync", {})
                     wait_frame = s.get("wait_frame", {})
                     uptime_s = float(s.get("uptime_ns", 0)) / 1e9
+                    if stamp_ns and int(stamp_ns) > 0:
+                        frame_age_ms = (time.time_ns() - int(stamp_ns)) / 1e6
+                        frame_age_str = f"{frame_age_ms:7.3f}"
+                    else:
+                        frame_age_str = "n/a"
                     age_arm = _metric_ms(sync.get("age_arm_ns", {}))
                     age_leg = _metric_ms(sync.get("age_leg_ns", {}))
                     age_imu = _metric_ms(sync.get("age_imu_ns", {}))
@@ -544,6 +556,7 @@ def main() -> None:
                         f"                  pub_leg={pub_leg} \n"
                         f"  SYNC:\n"
                         f"    ticks         : {int(sync.get('tick_total', 0)):,}   (overrun: {int(sync.get('tick_overrun', 0)):,})\n"
+                        f"    frame age (ms): {frame_age_str}   (now - latest_frame.stamp_ns)\n"
                         f"    tick age (ms) : arm={age_arm} \n"
                         f"                    leg={age_leg} \n"
                         f"                    imu={age_imu} \n"
