@@ -217,10 +217,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--control-hz", type=float, default=None)
     p.add_argument("--sync-hz", type=float, default=None)
     p.add_argument(
-        "--sync-phase-ms",
+        "--align-delay-ms",
         type=float,
-        default=-1.0,
-        help="Sync tick phase offset in milliseconds (advanced). <0 enables auto phase estimation from IMU stamps (default: -1).",
+        default=0.0,
+        help="Core knob (ms): wait this long after each tick before producing a frame. Larger improves interpolation alignment but adds fixed latency (default: 0.0).",
     )
     p.add_argument("--model", type=Path, default=None)
     p.add_argument("--cfg", type=Path, default=default_cfg)
@@ -313,7 +313,9 @@ def main() -> None:
 
     open_kwargs = dict(
         sync_hz=sync_hz,
-        sync_phase_ms=float(args.sync_phase_ms),
+        sync_phase_ms=0.0,
+        sync_clock="fixed",
+        align_delay_ms=float(args.align_delay_ms),
         enable_statistics=bool(args.enable_statistics),
         statistics_sample_every=int(args.statistics_sample_every),
         statistics_ema_shift=int(args.statistics_ema_shift),
@@ -389,12 +391,24 @@ def main() -> None:
 
     try:
         loop_idx = 0
+        last_stamp_ns = 0
         last_aligned = True
         last_align_warn_t = 0.0
-        next_deadline = time.perf_counter()
         while True:
             loop_idx += 1
-            stamp_ns, aligned, complete, obs = state.latest_frame()
+            try:
+                stamp_ns, aligned, complete, obs = state.wait_frame(timeout_s=1.0)
+            except Exception:
+                logger.warning("wait_frame timeout/stopped; retrying")
+                continue
+
+            dt_step = dt
+            if int(stamp_ns) > 0 and last_stamp_ns > 0:
+                dt_s = (int(stamp_ns) - int(last_stamp_ns)) / 1e9
+                if 0.0 < dt_s < 0.2:
+                    dt_step = dt_s
+            if int(stamp_ns) > 0:
+                last_stamp_ns = int(stamp_ns)
 
             if not complete:
                 now = time.monotonic()
@@ -427,7 +441,7 @@ def main() -> None:
 
             start_time = time.perf_counter()
             if fsm is not None:
-                leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
+                leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt_step)
                 arm_emergency = bool(fsm.emergency_stop)
             else:
                 if emergency_stop:
@@ -556,8 +570,8 @@ def main() -> None:
                         f"                  pub_leg={pub_leg} \n"
                         f"  SYNC:\n"
                         f"    ticks         : {int(sync.get('tick_total', 0)):,}   (overrun: {int(sync.get('tick_overrun', 0)):,})\n"
-                        f"    frame age (ms): {frame_age_str}   (now - latest_frame.stamp_ns)\n"
-                        f"    tick age (ms) : arm={age_arm} \n"
+                        f"    frame age (ms):         {frame_age_str}   (now - latest_frame.stamp_ns)\n"
+                        f"    tick age  (ms): arm={age_arm} \n"
                         f"                    leg={age_leg} \n"
                         f"                    imu={age_imu} \n"
                         f"    frames:\n"
@@ -568,11 +582,6 @@ def main() -> None:
                         f"      unaligned   : {int(sync.get('frame_unaligned_skew', 0)):,} (skew)\n"
                         f"    wait_frame    : ok {int(wait_frame.get('ok', 0)):,} | timeout {int(wait_frame.get('timeout', 0)):,} | stopped {int(wait_frame.get('stopped', 0)):,}",
                     )
-            next_deadline += dt
-            now = time.perf_counter()
-            if (now - next_deadline) > dt:
-                next_deadline = now
-            sleep_until(next_deadline)
 
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt")

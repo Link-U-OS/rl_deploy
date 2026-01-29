@@ -2,6 +2,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -395,7 +397,9 @@ PYBIND11_MODULE(_bindings, m) {
   m.def(
       "open",
       [](const py::object &config_path, double sync_hz, double max_skew_ms,
-         int max_backtrack, double sync_phase_ms, std::uint32_t raw_ring,
+         int max_backtrack, double sync_phase_ms, const std::string &sync_clock,
+         double align_delay_ms,
+         std::uint32_t raw_ring,
          std::uint32_t frame_ring,
          const py::object &arm_names, const py::object &leg_names,
          bool use_closed_ankle, bool ankle_torque_control,
@@ -438,6 +442,31 @@ PYBIND11_MODULE(_bindings, m) {
           }
           opt.sync.phase_ns = static_cast<std::int64_t>(phase_ns_f);
         }
+
+        {
+          auto key = sync_clock;
+          std::transform(key.begin(), key.end(), key.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+          if (key == "fixed") {
+            opt.sync.clock_source = SyncClockSource::Fixed;
+          } else if (key == "imu") {
+            opt.sync.clock_source = SyncClockSource::Imu;
+          } else {
+            throw std::invalid_argument(
+                "sync_clock must be 'fixed' or 'imu' (got: " + sync_clock + ")");
+          }
+        }
+
+        if (!std::isfinite(align_delay_ms) || align_delay_ms < 0.0) {
+          throw std::invalid_argument("align_delay_ms must be >= 0");
+        }
+        const auto delay_ns_f = align_delay_ms * 1e6;
+        if (!std::isfinite(delay_ns_f) ||
+            delay_ns_f >
+                static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+          throw std::invalid_argument("align_delay_ms out of range");
+        }
+        opt.sync.align_delay_ns = static_cast<std::int64_t>(delay_ns_f);
 
         opt.use_closed_ankle = use_closed_ankle;
         opt.ankle_torque_control = ankle_torque_control;
@@ -486,6 +515,11 @@ Open the AimRL SDK and return `(state, cmd)`.
   sync_phase_ms: Tick phase offset in milliseconds for aligning ticks to sensor
     timestamp phases (advanced). If <0, automatically estimates the phase from
     IMU timestamps (default: 0.0).
+  sync_clock: Tick clock source. 'fixed' uses system_clock scheduling. 'imu'
+    uses IMU timestamps as the master clock (default: fixed).
+  align_delay_ms: Additional delay before producing a frame for a given tick.
+    This adds a small bounded latency to allow interpolation using samples after
+    the tick, improving cross-sensor alignment (default: 0.0).
   raw_ring: Raw sample ring capacity (arm/leg/imu).
   frame_ring: Aligned frame ring capacity.
   arm_names: Optional list[str] of length 14 for command joint names.
@@ -501,7 +535,9 @@ Open the AimRL SDK and return `(state, cmd)`.
 )pbdoc",
       py::arg("config_path") = py::none(), py::arg("sync_hz") = 100.0,
       py::arg("max_skew_ms") = 3.0, py::arg("max_backtrack") = 200,
-      py::arg("sync_phase_ms") = 0.0, py::arg("raw_ring") = 2048,
+      py::arg("sync_phase_ms") = 0.0, py::arg("sync_clock") = "fixed",
+      py::arg("align_delay_ms") = 0.0,
+      py::arg("raw_ring") = 2048,
       py::arg("frame_ring") = 512,
       py::arg("arm_names") = py::none(), py::arg("leg_names") = py::none(),
       py::arg("use_closed_ankle") = true,

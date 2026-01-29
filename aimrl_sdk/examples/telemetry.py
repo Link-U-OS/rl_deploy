@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import queue
 import threading
@@ -13,6 +14,23 @@ from typing import Any, Optional
 from loguru import logger
 
 import aimrl_sdk
+
+
+def _configure_third_party_logging() -> None:
+    """Reduce noisy debug logs from third-party libs used by examples.
+
+    Some environments configure the root logger at DEBUG, causing libraries like
+    `foxglove-websocket` to spam per-message logs (subscribe/unsubscribe, etc.).
+    """
+
+    # Be conservative: keep warnings/errors, suppress debug chatter.
+    for name in (
+        "foxglove_websocket",
+        "foxglove_websocket.server",
+        "websockets",
+        "websockets.server",
+    ):
+        logging.getLogger(name).setLevel(logging.INFO)
 
 
 def _now_ns_fallback(stamp_ns: int) -> int:
@@ -228,6 +246,8 @@ class _FoxgloveLive:
             from foxglove_websocket.types import ChannelWithoutId
         except Exception as e:  # pragma: no cover
             raise RuntimeError("live view requires `foxglove-websocket` (pip install foxglove-websocket)") from e
+
+        _configure_third_party_logging()
 
         self._FoxgloveServer = FoxgloveServer
         self._ChannelWithoutId = ChannelWithoutId
