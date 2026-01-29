@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <mujoco model="body_torso">
     <body name = "torso" pos = "0 0 2" childclass = "zhiyuan">
-        <inertial pos = "-0.07088950 -0.00016512 0.16138088" mass = "18.89945962"
-                fullinertia = "0.59376016 0.55503329 0.18455985 0.00015891 0.00353796 -0.00043902" />
+        <inertial pos = "-0.06893 0.00034 0.17523" mass = "20.4197"
+                fullinertia = "0.6018644 0.5693776 0.1900957 -0.0007320 0.0031931 -0.0008633" />
         <freejoint/>
         <geom type = "mesh" mesh = "torso" material = "metalic silver"/>
         <geom type = "mesh" mesh = "logo" material = "metalic black"/>

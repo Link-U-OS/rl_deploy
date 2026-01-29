@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e pipefail
+set -e -o pipefail
 
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=232
@@ -14,5 +14,5 @@ pushd "$SHELL_FOLDER"/../../ || exit
     export LD_LIBRARY_PATH=./deploy_assets/thirdparty/onnxruntime-linux-x64-1.19.2/lib:$LD_LIBRARY_PATH
     export PLUGIN_INSTALL_DIR="$PWD/legged_system/bin"
     export AIMRT_CFG_PATH="$PWD/legged_system/bin/iceoryx_chn_cfg.yaml"
-    ros2 launch rl_controllers rl_control_real.launch.py
+    ros2 launch rl_controllers rl_control_real.launch.py "$@"
 popd || exit
