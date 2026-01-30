@@ -90,6 +90,7 @@ Common parameters:
 - `config_path`: path to the AimRT backend YAML; by default it uses `AIMRL_SDK_CONFIG`, otherwise falls back to `aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml`
 - `sync_hz`: aligned-frame frequency (Hz)
 - `max_skew_ms`: maximum allowed timestamp skew (ms); frames beyond this will be `aligned=False`
+- `align_delay_ms`: **the core knob**. Additional delay after a tick (ms) to allow interpolation using samples after the tick (default `0.0`)
 - `use_closed_ankle`: enable the ankle closed-chain conversion (default True)
 - `enable_statistics`: enable low-overhead runtime statistics (default False)
 - `statistics_sample_every`: sample 1/N events for stats aggregation (default 1)
@@ -115,19 +116,24 @@ Practical tip: treat `(complete and aligned)` as the primary “can I use this f
 
 #### Alignment logic (how `aligned/complete/skew_ns` are computed)
 
-The aligned-frame generator runs in a dedicated thread at `sync_hz`. For each tick:
+The aligned-frame generator runs in a dedicated thread at `sync_hz`. For the common deployment case where IMU and joint states are **free-running at different rates** (e.g. 500Hz IMU + 1000Hz joints), the SDK uses **fixed ticks + bounded small delay + interpolation**:
 
-- **Tick time**: choose a target `tick` on a fixed period grid (`period_ns = 1e9 / sync_hz`), then `sleep_until(tick)`.
-- **Sample selection**: for each stream (arm/leg/imu), pick the most recent sample with `sample.stamp <= tick` by scanning backward in the ring buffer, up to `max_backtrack`.
+- **Tick time (observation time)**: choose a target `tick` on a period grid (`period_ns = 1e9 / sync_hz`) so higher-level code can reliably “infer on ticks”.
+- **Align delay (publish time)**: wait until `release_time = tick + align_delay_ms` before producing the frame (this is the core knob).
+  - Purpose: allow access to samples *after* the tick to interpolate all streams to the same `tick`.
+  - Cost: a small, configurable, bounded latency (start with 2ms for 500Hz IMU).
+- **Sample selection & interpolation**: for each stream (arm/leg/imu), find bracket samples around `tick`:
+  - If `t0 <= tick <= t1` exists, interpolate (`pos/vel/eff`: linear; IMU quat: slerp; IMU gyro/acc: linear).
+  - If only a `<= tick` sample exists, fall back to holding the latest sample (skew may increase).
 - **Completeness**:
-  - `complete = arm_ok && leg_ok && imu_ok`
+  - `complete = arm_ok && leg_ok && imu_ok` (each stream has at least a “before tick” sample)
 - **Skew**:
   - `skew_ns = max(arm.stamp, leg.stamp, imu.stamp) - min(arm.stamp, leg.stamp, imu.stamp)` (only meaningful when `complete=True`)
 - **Aligned**:
   - `aligned = complete && (skew_ns <= max_skew_ms * 1e6)`
 
 Frame contents and timestamping:
-- `frame.stamp_ns` is the **tick** time (not the chosen sample time).
+- `frame.stamp_ns` is the **tick** time (observation time; not the publish time, and not necessarily any stream’s raw sample stamp).
 - When `complete=True`, `obs` is filled from the chosen arm/leg/imu samples (and optionally with the closed-ankle conversion applied).
 - When `complete=False`, `obs` is held from the last complete frame (see above).
 
@@ -148,7 +154,7 @@ Important note about timestamps:
 
 Typical usage:
 - pass `stamp_ns` from the corresponding observation frame (for downstream synchronization)
-- run at `control_hz`: read `latest_frame()` → compute → `set_*()` → `commit()`
+- use the frame cadence as the control cadence: read `wait_frame()` → compute → `set_*()` → `commit()` (more stable and makes end-to-end latency easier to bound)
 
 ## Runtime Statistics (Latency/Jitter/Performance)
 

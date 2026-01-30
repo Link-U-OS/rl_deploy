@@ -91,6 +91,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 - `config_path`: AimRT 后端 YAML；默认会用 `AIMRL_SDK_CONFIG`，否则回落到包内默认 `aimrl_sdk/src/aimrl_sdk/config/aimrt_ros2_backend.yaml`
 - `sync_hz`: aligned frame 生成频率（Hz）
 - `max_skew_ms`: 允许的最大时间戳偏差（ms），超出则该帧 `aligned=False`
+- `align_delay_ms`: **核心参数**。tick 后额外延迟（ms），用于等待 tick 后的样本以做插值对齐（默认 `0.0`）
 - `use_closed_ankle`: 是否启用踝关节闭链转换（默认 True）
 - `enable_statistics`: 启用低开销运行时统计（默认 False）
 - `statistics_sample_every`: 统计采样 1/N 事件（默认 1）
@@ -116,19 +117,24 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 
 #### 对齐逻辑（`aligned/complete/skew_ns` 是如何计算的）
 
-对齐帧生成线程以 `sync_hz` 频率运行。每个 tick 的逻辑大致如下：
+对齐帧生成线程以 `sync_hz` 频率运行。针对 **IMU/关节状态不同频率、且不同时触发** 的典型部署场景，SDK 使用“**固定 tick + 有界小延迟 + 插值重采样**”来同时兼顾延迟与对齐：
 
-- **tick 时间**：按固定周期网格选择目标 `tick`（`period_ns = 1e9 / sync_hz`），然后 `sleep_until(tick)`。
-- **样本选择**：对每一路（arm/leg/imu），从 ring buffer 向后扫描，选择满足 `sample.stamp <= tick` 的最新样本（最多回溯 `max_backtrack` 个样本）。
-- **complete（数据齐全）**：
+- **tick 时间（观测时间）**：按周期网格选择目标 `tick`（`period_ns = 1e9 / sync_hz`），确保上层能稳定地“按 tick 推理”。
+- **align delay（发布时间）**：线程会等待到 `release_time = tick + align_delay_ms` 才生成该 tick 的对齐帧（这就是核心可调参数）。
+  - 目的：允许拿到 `tick` 之后的样本，用于插值（把多源数据对齐到同一 `tick`）
+  - 代价：增加一个可控的固定延迟（建议从 2ms 起步，适配 500Hz IMU）
+- **样本选择与插值**：对每一路（arm/leg/imu）在 ring 中寻找 `tick` 的前后括号样本：
+  - 若能找到 `t0 <= tick <= t1`，则对 `pos/vel/eff` 做线性插值；IMU 的 `quat` 做 slerp，`gyro/acc` 线性插值。
+  - 若只找到 `<= tick` 的样本，则退化为“保持最近一次样本”（此时跨流 skew 可能变大）。
+- **complete（数据齐全）**：三路均至少有“tick 之前”样本可用：
   - `complete = arm_ok && leg_ok && imu_ok`
-- **skew（时间戳偏差）**：
-  - `skew_ns = max(arm.stamp, leg.stamp, imu.stamp) - min(arm.stamp, leg.stamp, imu.stamp)`（仅在 `complete=True` 时有意义）
+- **skew（跨流对齐误差）**：
+  - `skew_ns = max(arm.stamp, leg.stamp, imu.stamp) - min(arm.stamp, leg.stamp, imu.stamp)`
 - **aligned（对齐成功）**：
   - `aligned = complete && (skew_ns <= max_skew_ms * 1e6)`
 
 关于帧内容与时间戳：
-- `frame.stamp_ns` 使用的是 **tick 时间**（不是被选中的样本时间）。
+- `frame.stamp_ns` 使用的是 **tick 时间**（观测时间，不是发布时刻，也不是某一路样本时间）。
 - 当 `complete=True` 时，`obs` 由选中的 arm/leg/imu 样本填充（并可选应用踝关节闭链转换）。
 - 当 `complete=False` 时，`obs` 会保持为上一帧 complete 的观测（见上一节）。
 
@@ -150,7 +156,7 @@ uv run --project aimrl_sdk python aimrl_sdk/examples/rl_deploy_basic.py --cfg ai
 
 通常建议：
 - `stamp_ns` 传入对应观测帧的时间戳（用于下游同步）
-- 以 `control_hz` 频率循环：读 `latest_frame()` → 计算 → `set_*()` → `commit()`
+- 以新帧为节拍：读 `wait_frame()` → 计算 → `set_*()` → `commit()`（更稳定，且便于把“总体延迟”压到较小范围）
 
 ## 运行时统计（延迟/抖动/性能）
 
