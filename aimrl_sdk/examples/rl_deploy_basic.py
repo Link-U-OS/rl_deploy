@@ -77,9 +77,9 @@ def quat_wxyz_to_euler_xyz_wrap_2pi(q_wxyz: np.ndarray) -> np.ndarray:
     cos_yaw = 1.0 - 2.0 * (y * y + z * z)
     yaw = math.atan2(sin_yaw, cos_yaw)
 
-    roll = roll % 2.0 * math.pi
-    pitch = pitch % 2.0 * math.pi
-    yaw = yaw % 2.0 * math.pi
+    roll = roll % (2.0 * math.pi)
+    pitch = pitch % (2.0 * math.pi)
+    yaw = yaw % (2.0 * math.pi)
 
     return np.array([roll, pitch, yaw], dtype=np.float32)
 
@@ -146,7 +146,7 @@ class OnnxPolicyRunner:
         if "roboverse" in model_path_lower:
             self.quat_convention = "wxyz"
             self.euler_wrap_2pi = True
-        print(self.quat_convention)
+        print(self.quat_convention, self.euler_wrap_2pi)
 
     def _update_phase(self, cmd_x: float, cmd_y: float, cmd_yaw: float) -> None:
         if not self.cfg.sw_mode:
@@ -195,8 +195,9 @@ class OnnxPolicyRunner:
                 out_parts.append(imu_gyro * scale)
             elif typ == "imu_euler":
                 imu_quat = obs[aimrl_sdk.OBS.imu_quat_xyzw].astype(np.float32, copy=False)
-
+                
                 if self.quat_convention == "wxyz" and self.euler_wrap_2pi:
+                    imu_quat = np.array([imu_quat[3], imu_quat[0], imu_quat[1], imu_quat[2]], dtype=np.float32)
                     rpy = quat_wxyz_to_euler_xyz_wrap_2pi(imu_quat)
                 else:
                     rpy = quat_xyzw_to_euler_xyz(imu_quat)
