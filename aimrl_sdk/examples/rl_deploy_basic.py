@@ -56,6 +56,34 @@ def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
     return np.array([roll, pitch, yaw], dtype=np.float32)
 
 
+def quat_wxyz_to_euler_xyz_wrap_2pi(q_wxyz: np.ndarray) -> np.ndarray:
+    # q_wxyz: [w, x, y, z]
+    w, x, y, z = [float(v) for v in q_wxyz]
+
+    # roll
+    sin_roll = 2.0 * (w * x + y * z)
+    cos_roll = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sin_roll, cos_roll)
+
+    # pitch
+    sin_pitch = 2.0 * (w * y - z * x)
+    if abs(sin_pitch) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sin_pitch)
+    else:
+        pitch = math.asin(sin_pitch)
+
+    # yaw
+    sin_yaw = 2.0 * (w * z + x * y)
+    cos_yaw = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(sin_yaw, cos_yaw)
+
+    roll = roll % 2.0 * math.pi
+    pitch = pitch % 2.0 * math.pi
+    yaw = yaw % 2.0 * math.pi
+
+    return np.array([roll, pitch, yaw], dtype=np.float32)
+
+
 def hold_joints_towards_target(cur_pos: np.ndarray, target_pos: np.ndarray, max_delta_pos: float) -> np.ndarray:
     cur = cur_pos.astype(np.float64, copy=False).reshape(-1)
     target = target_pos.astype(np.float64, copy=False).reshape(-1)
@@ -77,17 +105,26 @@ class OnnxPolicyRunner:
 
         self.cfg = cfg
         self.session = ort.InferenceSession(str(cfg.model_path), providers=["CPUExecutionProvider"])
-        self.input_name = self.session.get_inputs()[0].name
-        self.output_name = self.session.get_outputs()[0].name
+        self.input_name = self.session.get_inputs()[0].name  # obs 3102  47    3102/66=47
+        self.output_name = self.session.get_outputs()[0].name  # actions 12  12
 
-        in_shape = self.session.get_inputs()[0].shape
+        in_shape = self.session.get_inputs()[0].shape  # [1,3102]/[1, 47]
         if len(in_shape) == 2 and isinstance(in_shape[1], int):
-            expect = int(cfg.observation_size) * int(cfg.num_hist)
-            if in_shape[1] != expect:
-                raise ValueError(f"model input dim mismatch: model={in_shape[1]} cfg={expect}")
+            model_dim = int(in_shape[1])  # 3102/47
+            step_dim = int(cfg.observation_size)  # 47
+            hist_dim = step_dim * int(cfg.num_hist)  # 47 * 66 = 3102
+
+            if model_dim == hist_dim:
+                self.use_history = True
+            elif model_dim == step_dim:
+                self.use_history = False
+            else:
+                raise ValueError(f"model input dim mismatch: model={model_dim} cfg_step={step_dim} cfg_hist={hist_dim}")
+        else:
+            self.use_history = True
 
         self.last_actions = np.zeros((12,), dtype=np.float32)
-        self.hist = np.zeros((cfg.num_hist, cfg.observation_size), dtype=np.float32)
+        self.hist = np.zeros((cfg.num_hist, cfg.observation_size), dtype=np.float32)  # 66 * 47
         self.is_first = True
         self.phase_start_time = time.time()
         self.phase = 0.0
@@ -102,12 +139,20 @@ class OnnxPolicyRunner:
         if offset != cfg.observation_size:
             raise ValueError(f"observation.size mismatch: components sum={offset} cfg={cfg.observation_size}")
 
+        self.quat_convention = "xyzw"  # what training expects: "xyzw" or "wxyz"
+        self.euler_wrap_2pi = False  # whether training used % (2*pi)
+        model_path_lower = str(self.cfg.model_path).lower()
+        print(model_path_lower)
+        if "roboverse" in model_path_lower:
+            self.quat_convention = "wxyz"
+            self.euler_wrap_2pi = True
+        print(self.quat_convention)
+
     def _update_phase(self, cmd_x: float, cmd_y: float, cmd_yaw: float) -> None:
         if not self.cfg.sw_mode:
             t = time.time() - self.phase_start_time
             self.phase = (t / self.cfg.cycle_time) % 1.0
             return
-
         cmd_norm = math.sqrt(cmd_x * cmd_x + cmd_y * cmd_y + cmd_yaw * cmd_yaw)
         if cmd_norm <= self.cfg.cmd_threshold:
             self.phase = 0.0
@@ -135,6 +180,7 @@ class OnnxPolicyRunner:
                         ],
                         dtype=np.float32,
                     )
+                    * scale
                 )
             elif typ == "leg_pos":
                 leg_pos = obs[aimrl_sdk.OBS.leg_pos].astype(np.float32, copy=False)
@@ -149,9 +195,17 @@ class OnnxPolicyRunner:
                 out_parts.append(imu_gyro * scale)
             elif typ == "imu_euler":
                 imu_quat = obs[aimrl_sdk.OBS.imu_quat_xyzw].astype(np.float32, copy=False)
-                out_parts.append(quat_xyzw_to_euler_xyz(imu_quat) * scale)
+
+                if self.quat_convention == "wxyz" and self.euler_wrap_2pi:
+                    rpy = quat_wxyz_to_euler_xyz_wrap_2pi(imu_quat)
+                else:
+                    rpy = quat_xyzw_to_euler_xyz(imu_quat)
+                out_parts.append(rpy * scale)  # (x y z w)->(roll pitch yaw) (w x y z)-->(roll pitch yaw)
+
             elif typ == "imu_quat":
                 imu_quat = obs[aimrl_sdk.OBS.imu_quat_xyzw].astype(np.float32, copy=False)
+                if self.quat_convention == "wxyz":
+                    imu_quat = np.array([imu_quat[3], imu_quat[0], imu_quat[1], imu_quat[2]], dtype=np.float32)
                 out_parts.append(imu_quat * scale)
             else:
                 raise ValueError(f"unsupported observation component type: {typ}")
@@ -167,17 +221,26 @@ class OnnxPolicyRunner:
         self._update_phase(cmd_x, cmd_y, cmd_yaw)
         step_obs = self._build_step_observation(obs, cmd_x, cmd_y, cmd_yaw)
 
-        if self.is_first:
-            step0 = step_obs.copy()
-            for s in self._last_actions_slices:
-                step0[s] = 0.0
-            self.hist[:] = step0
-            self.is_first = False
+        if self.use_history:
+            if self.is_first:
+                step0 = step_obs.copy()
+                for s in self._last_actions_slices:
+                    step0[s] = 0.0
+                self.hist[:] = step0
+                self.is_first = False
+            else:
+                self.hist[:-1] = self.hist[1:]
+                self.hist[-1] = step_obs
+            inp = self.hist.reshape(1, -1).astype(np.float32, copy=False)
         else:
-            self.hist[:-1] = self.hist[1:]
-            self.hist[-1] = step_obs
+            if self.is_first:
+                step0 = step_obs.copy()
+                for s in self._last_actions_slices:
+                    step0[s] = 0.0
+                step_obs = step0
+                self.is_first = False
+            inp = step_obs.reshape(1, -1).astype(np.float32, copy=False)
 
-        inp = self.hist.reshape(1, -1)
         np.clip(inp, -self.cfg.clip_obs, self.cfg.clip_obs, out=inp)
 
         out = self.session.run([self.output_name], {self.input_name: inp})[0]

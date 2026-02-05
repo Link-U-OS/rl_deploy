@@ -1,0 +1,56 @@
+control:
+  hz: 100.0
+  sync_hz: 100.0
+
+model:
+  path: ../policy/roboverse/20260130_161110_ckpt49999.onnx
+
+robot:
+  # 12-DoF leg order:
+  # [L_hip_roll, L_hip_yaw, L_hip_pitch, L_tarsus, L_toe_pitch, L_toe_roll,
+  #  R_hip_roll, R_hip_yaw, R_hip_pitch, R_tarsus, R_toe_pitch, R_toe_roll]
+  leg_default_joint_angles: [0.0, 0.0, -0.115, 0.267, -0.152, 0.0, 0.0, 0.0, -0.115, 0.267, -0.152, 0.0]
+  leg_stiffness: [130.0, 130.0, 200.0, 220.0, 50.0, 50.0, 130.0, 130.0, 200.0, 220.0, 50.0, 50.0]
+  leg_damping: [5.0, 3.0, 6.0, 7.0, 1.5, 1.5, 5.0, 3.0, 6.0, 7.0, 1.5, 1.5]
+
+  # 14-DoF arm order: left(7) + right(7).
+  # The example will "hold" arms at this posture, with a per-tick max step clamp.
+  arm_default_joint_angles: [0.0, 1.35, 0.0, 0.0, 1.57, 0.0, 0.0, 0.0, -1.35, 0.0, 0.0, 1.57, 0.0, 0.0]
+  arm_stiffness: [100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0, 100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0]
+  arm_damping: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2, 4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2]
+  arm_delta_pos_threshold: 0.05
+  arm_emergency_damping: 3.0
+
+policy:
+  action_scale: 0.5
+  clip_actions: 100.0
+
+phase:
+  cycle_time: 1.0
+  sw_mode: true
+  cmd_threshold: 0.05
+
+observation:
+  size: 47
+  num_hist: 66
+  clip: 100.0
+
+  # Observation composition (concatenated in order):
+  # - command: [sin(2πphase), cos(2πphase), cmd_x, cmd_y, cmd_yaw] (5)
+  # - leg_pos: (leg_pos - leg_default_joint_angles) * scale (12)
+  # - leg_vel: leg_vel * scale (12)
+  # - last_actions: previous action (12)
+  # - imu_gyro: imu_gyro_xyz * scale (3)
+  # - imu_euler: euler_xyz_from_quat * scale (3)
+  components:
+    - type: command
+      scale_vec: [1.0, 1.0, 2.0, 2.0, 1.0]
+    - type: leg_pos
+      scale: 1.0
+    - type: leg_vel
+      scale: 0.05
+    - type: last_actions
+    - type: imu_gyro
+      scale: 1.0
+    - type: imu_euler
+      scale: 1.0

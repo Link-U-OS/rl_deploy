@@ -15,6 +15,7 @@ except ModuleNotFoundError as e:
 class ObsComponent:
     type: str
     scale: float = 1.0
+    scale_vec: list[float] | None = None
 
 
 def component_dim(typ: str) -> int:
@@ -49,7 +50,9 @@ class AppCfg:
     arm_stiffness: list[float] = field(
         default_factory=lambda: [100.0, 200.0, 200.0, 100.0, 200.0, 200.0, 200.0] * 2
     )  # -> np.ndarray(14,)
-    arm_damping: list[float] = field(default_factory=lambda: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2] * 2)  # -> np.ndarray(14,)
+    arm_damping: list[float] = field(
+        default_factory=lambda: [4.0, 0.2, 0.2, 4.0, 0.2, 0.2, 0.2] * 2
+    )  # -> np.ndarray(14,)
     arm_delta_pos_threshold: float = 0.05
     arm_emergency_damping: float = 3.0
     obs_components: list[ObsComponent] = MISSING
@@ -113,7 +116,12 @@ class AppCfg:
             elif isinstance(item, dict):
                 if "type" not in item:
                     raise KeyError(f"observation.components[{i}] missing required key `type`")
-                obs_components.append(ObsComponent(type=str(item["type"]), scale=float(item.get("scale", 1.0))))
+                scale_vec = item.get("scale_vec", None)
+                if scale_vec is not None:
+                    scale_vec = [float(v) for v in scale_vec]
+                obs_components.append(
+                    ObsComponent(type=str(item["type"]), scale=float(item.get("scale", 1.0)), scale_vec=scale_vec)
+                )
             else:
                 raise TypeError(f"observation.components[{i}] must be a dict, got {type(item).__name__}")
 
