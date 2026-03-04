@@ -3,32 +3,32 @@
     
     <body name = "left-base-link" pos = "-0.03779 0 0.3421" euler = "1.5707963 0 0">
         <body name = "left-arm-link1" pos = "0 0 -0.191" euler = "0 0 -1.5707963">
-            <inertial pos = "-0.002330 0.008782 0.032870" mass = "0.276944"
-                    fullinertia = "0.000595 0.000381 0.000542 -0.000006 -0.000002 0.000053" />
+            <inertial pos = "-0.00178 0.00890 0.03374" mass = "0.2791"
+                    fullinertia = "0.0005867 0.0003685 0.0005358 -0.0000051 -0.0000031 0.0000535" />
             <joint name = "idx13_left_arm_joint1" type = "hinge" axis = "0 0 1" range = "-2.967 2.967" limited = "true" damping = "10"/>
             <geom type = "mesh" mesh = "left-arm-link1" material = "metalic black"/>
 
             <body name = "left-arm-link2" pos = "0 0 0" euler = "1.5707963 0 0">
-                <inertial pos = "-0.000451 -0.051682 -0.001084" mass = "2.852114"
-                        fullinertia = "0.011984 0.002880 0.011709 0.000039 0.000003 0.000140" />
+                <inertial pos = "-0.00041 -0.05231 0.00330" mass = "2.8105"
+                        fullinertia = "0.0117766 0.0027682 0.0115274 0.0000349 -0.0000001 0.0001464" />
                 <joint name = "idx14_left_arm_joint2" type = "hinge" axis = "0 0 1" range = "-0.523598767 1.658062761 " limited = "true" damping = "10"/>
                 <geom type = "mesh" mesh = "left-arm-link2" material = "metalic silver"/>
 
                 <body name = "left-arm-link3" pos = "0 -0.154 0" euler = "1.5707963 0 0">
-                    <inertial pos = "-0.000673 0.001065 0.079222" mass = "1.310295"
-                            fullinertia = "0.002030 0.002186 0.001189 -0.000008 0.000005 0.000018" />
+                    <inertial pos = "0.00049 0.00634 0.08017" mass = "1.3510"
+                            fullinertia = "0.0022729 0.0023938 0.0012421 -0.0000194 0.0000928 0.0000240" />
                     <joint name = "idx15_left_arm_joint3" type = "hinge" axis = "0 0 1" range = "-2.967 2.967" limited = "true" damping = "10"/>
                     <geom type = "mesh" mesh = "left-arm-link3" material = "metalic silver"/>
 
                     <body name = "left-arm-link4" pos = "0 0 0.093" euler = "-1.5707963 0 1.5707963">
-                        <inertial pos = "0.000273 -0.066853 -0.007408" mass = "0.677343"
-                            fullinertia = "0.000893 0.000508 0.000767 -0.000001 -0.000002 0.000238" />
+                        <inertial pos = "0.00472 -0.06763 -0.00679" mass = "0.68884"
+                            fullinertia = "0.0008581 0.0005102 0.0007358 0.0000004 -0.0000025 0.0002256" />
                         <joint name = "idx16_left_arm_joint4" type = "hinge" axis = "0 0 1" range = "-2.094395067 0" limited = "true" damping = "10"/>
                         <geom type = "mesh" mesh = "left-arm-link4" material = "metalic black"/>
 
                         <body name = "left-arm-link5" pos = "0  -0.103 0.0" euler = "1.5707963 0 0">
-                            <inertial pos = "-0.001962 -0.000002 0.071786" mass = "0.260886"
-                                    fullinertia = "0.000638 0.000618 0.000229 0.000000 0.000015 0.000000" />
+                            <inertial pos = "0.00710 -0.00001 0.07157" mass = "0.7298"
+                                    fullinertia = "0.0014530 0.0012147 0.0005355 0.0000002 0.0000108 0.0000012" />
                             <joint name = "idx17_left_arm_joint5" type = "hinge" axis = "0 0 1" range = "-2.87979 2.87979" limited = "true" damping = "10"/>
                             <geom type = "mesh" mesh = "left-arm-link5" material = "metalic silver"/>
 
@@ -62,14 +62,14 @@
                             </body>
 
                             <body name = "left-arm-link6" pos = "-0.01 0 0.1595" euler = "-1.5707963 1.5707963 0">
-                                <inertial pos = "0.00018011 -0.00021701 0.00000000" mass = "0.02504627"
-                                        fullinertia = "0.00000197 0.00000173 0.00000071 0 0 0" />
+                                <inertial pos = "0.00012 -0.00454 0.00000000" mass = "0.0264"
+                                        fullinertia = "0.0000027 0.0000023 0.0000008 0.00000000 0.00000000 0.00000000" />
                                 <joint name = "idx18_left_arm_joint6" type = "hinge" axis = "0 0 1" range = "-0.7854 0.7854" limited = "true" damping = "0.5"/>
                                 <geom type = "mesh" mesh = "left-arm-link6" material = "metalic black"/>
 
                                 <body name = "left-arm-link7" pos = "0 0 0" euler = "1.5707963 0 0">
-                                    <inertial pos = "-0.01211757 -0.00009712 0.00886324" mass = "0.05050219" 
-                                        fullinertia = "0.00000828 0.00001140 0.00001294 0.00000006 -0.00000179 0.00000004" />
+                                    <inertial pos = "-0.01106 0.0 0.00793" mass = "0.0229" 
+                                        fullinertia = "0.0000031 0.0000047 0.0000048 0.0000000 -0.0000006 0.00000000" />
                                     <joint name = "idx19_left_arm_joint7" type = "hinge" axis = "0 0 1" range = "-0.5236 0.5236" limited = "true" damping = "0.5"/>
                                     <geom type = "mesh" mesh = "left-arm-link7" material = "metalic black"/>
                                 
@@ -85,32 +85,32 @@
 
     <body name = "right-base-link" pos = "-0.03779 0 0.3421" euler = "1.5707963 0 0">   
         <body name = "right-arm-link1" pos = "-0.0 0.0 0.191" euler = "0   0  -1.5707963">
-            <inertial pos = "-0.002330 0.008782 -0.032870" mass = "0.276944"
-                    fullinertia = "0.000595 0.000381 0.000542 -0.000006 0.000002 -0.000053" />
+            <inertial pos = "-0.00182 0.00889 -0.03374" mass = "0.2791"
+                    fullinertia = "0.0005866 0.0003684 0.0005359 -0.0000055 0.0000032 -0.0000535" />
             <joint name = "idx20_right_arm_joint1" type = "hinge" axis = "0 0 1" range = "-2.967 2.967" limited = "true" damping = "10"/>
             <geom type = "mesh" mesh = "right-arm-link1" material = "metalic black"/>
 
             <body name = "right-arm-link2" pos = "0 0 0.0" euler = "1.5707963 0 0">
-                <inertial pos = "-0.000451 0.051682 -0.001084" mass = "2.852114"
-                        fullinertia = "0.011984 0.002880 0.011709 -0.000039 0.000003 -0.000140" />
+                <inertial pos = "0.00004 0.05207 0.00330" mass = "2.8300"
+                        fullinertia = "0.0118261 0.0028124 0.0115964 -0.0000112 -0.0000029 -0.0001484" />
                 <joint name = "idx21_right_arm_joint2" type = "hinge" axis = "0 0 1" range = "-1.658062761 0.523598767 " limited = "true" damping = "10"/>
                 <geom type = "mesh" mesh = "right-arm-link2" material = "metalic silver"/>
 
                 <body name = "right-arm-link3" pos = "0 0.154  0" euler = "1.5707963 0 0">
-                    <inertial pos = "-0.000673 0.001065 -0.079222" mass = "1.310295"
-                            fullinertia = "0.002030 0.002186 0.001189 -0.000008 -0.000005 -0.000018" />
+                    <inertial pos = "-0.00096 0.00583 -0.08207" mass = "1.2968"
+                            fullinertia = "0.0019988 0.0021428 0.0011455 -0.0000031 0.0000017 -0.0000263" />
                     <joint name = "idx22_right_arm_joint3" type = "hinge" axis = "0 0 1" range = "-2.967 2.967" limited = "true" damping = "10"/>
                     <geom type = "mesh" mesh = "right-arm-link3" material = "metalic silver"/>
 
                     <body name = "right-arm-link4" pos = "0 0 -0.093" euler = "-1.5707963 0 1.5707963">
-                        <inertial pos = "0.000273 0.066853 -0.007408" mass = "0.677343"
-                            fullinertia = "0.000893 0.000508 0.000767 0.000001 -0.000002 -0.000238" />
+                        <inertial pos = "0.00472 0.06720 -0.00680" mass = "0.6888"
+                            fullinertia = "0.0008646 0.0005111 0.0007428 0.0000021 -0.0000019 -0.0002278" />
                         <joint name = "idx23_right_arm_joint4" type = "hinge" axis = "0 0 1" range = "0 2.094395067" limited = "true" damping = "10"/>
                         <geom type = "mesh" mesh = "right-arm-link4" material = "metalic black"/>
 
                         <body name = "right-arm-link5" pos = "0  0.103 0.0" euler = "1.5707963 0 0">
-                            <inertial pos = "-0.001962 -0.000002 -0.071786" mass = "0.260886"
-                                    fullinertia = "0.000638 0.000618 0.000229 0.000000 -0.000015 -0.000000" />
+                            <inertial pos = "0.00716 0.00001 -0.07161" mass = "0.7269"
+                                    fullinertia = "0.0014427 0.0012047 0.0005343 -0.0000009 -0.0000033 0.0000009" />
                             <joint name = "idx24_right_arm_joint5" type = "hinge" axis = "0 0 1" range = "-2.87979 2.87979" limited = "true" damping = "10"/>
                             <geom type = "mesh" mesh = "right-arm-link5" material = "metalic silver"/>
 
@@ -143,14 +143,14 @@
                             </body>
 
                             <body name = "right-arm-link6" pos = "-0.01 0 -0.1595" euler = "-1.5707963 1.5707963 0">
-                                <inertial pos = "-0.00018011 -0.00021701 0.00000000" mass = "0.02504627"
-                                        fullinertia = "0.00000197 0.00000173 0.00000071 0 0 0" />
+                                <inertial pos = "-0.00012 -0.00446 0.00000000" mass = "0.0264"
+                                        fullinertia = "0.0000027 0.0000023 0.0000008 -0.00000000 -0.00000000 0.00000000" />
                                 <joint name = "idx25_right_arm_joint6" type = "hinge" axis = "0 0 1" range = "-0.7854 0.7854" limited = "true" damping = "0.5"/>
                                 <geom type = "mesh" mesh = "right-arm-link6" material = "metalic black"/>
 
                                 <body name = "right-arm-link7" pos = "0 0 0" euler = "1.5707963 0 0">
-                                    <inertial pos = "0.01211757 -0.00009712 0.00886324" mass = "0.05050219" 
-                                        fullinertia = "0.00000828 0.00001140 0.00001294 -0.00000006 0.00000179 0.00000004" />
+                                    <inertial pos = "0.01105 0.0 0.00758" mass = "0.0229" 
+                                        fullinertia = "0.0000031 0.0000047 0.0000048 0.0 0.0000006 0.0" />
                                     <joint name = "idx26_right_arm_joint7" type = "hinge" axis = "0 0 1" range = "-0.5236 0.5236" limited = "true" damping = "0.5"/>
                                     <geom type = "mesh" mesh = "right-arm-link7" material = "metalic black"/>
                                 

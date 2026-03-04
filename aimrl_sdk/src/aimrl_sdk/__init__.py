@@ -86,6 +86,11 @@ def open(
     if args and (config_path is not None):
         raise TypeError("config_path specified both positionally and by keyword")
 
+    if "sync_delay_ms" in kwargs:
+        if "align_delay_ms" in kwargs:
+            raise TypeError("both sync_delay_ms and align_delay_ms specified")
+        kwargs["align_delay_ms"] = kwargs.pop("sync_delay_ms")
+
     if args:
         return _open_native(*args, **kwargs)
 

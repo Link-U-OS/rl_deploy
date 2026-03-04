@@ -9,6 +9,11 @@ constexpr int kArmDof = 14;
 constexpr int kLegDof = 12;
 constexpr int kFrameDim = 88;
 
+enum class SyncClockSource : std::uint8_t {
+  Fixed = 0,
+  Imu = 1,
+};
+
 struct TimestampNs {
   std::int64_t value{0};
   friend constexpr auto operator<=>(TimestampNs, TimestampNs) = default;
@@ -73,6 +78,15 @@ struct SyncConfig {
   double frame_hz{100.0};
   std::int64_t max_skew_ns{3'000'000}; // 3ms
   int max_backtrack{200};
+  SyncClockSource clock_source{SyncClockSource::Fixed};
+  // Additional delay (ns) before producing a frame for a given tick. This
+  // intentionally trades a small, bounded latency for better cross-sensor
+  // alignment by allowing access to samples after the tick for interpolation.
+  std::int64_t align_delay_ns{0};
+  // Tick schedule phase offset relative to integer multiples of the tick period.
+  // This can be used to align ticks to sensor timestamp phases (e.g. 0.5ms).
+  // Range: [0, tick_period_ns).
+  std::int64_t phase_ns{0};
 };
 
 } // namespace aimrl_sdk

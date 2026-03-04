@@ -13,6 +13,27 @@ from loguru import logger
 import aimrl_sdk
 from rl_deploy_config import AppCfg, component_dim, load_app_cfg
 from teleop_control import MotionFSM, TeleopInput
+from telemetry import FrameCaptureThread, Telemetry, TelemetryConfig
+
+
+def sleep_until(deadline_s: float, *, spin_threshold_s: float = 0.002) -> None:
+    """Sleep until an absolute perf_counter() deadline.
+
+    Uses coarse sleep first, then (optionally) a short busy-wait to reduce oversleep.
+    """
+    while True:
+        now = time.perf_counter()
+        remaining = deadline_s - now
+        if remaining <= 0.0:
+            return
+
+        if remaining > spin_threshold_s:
+            time.sleep(max(0.0, remaining - spin_threshold_s))
+            continue
+
+        while time.perf_counter() < deadline_s:
+            pass
+        return
 
 
 def quat_xyzw_to_euler_xyz(q_xyzw: np.ndarray) -> np.ndarray:
@@ -195,6 +216,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--control-hz", type=float, default=None)
     p.add_argument("--sync-hz", type=float, default=None)
+    p.add_argument(
+        "--align-delay-ms",
+        type=float,
+        default=0.0,
+        help="Core knob (ms): wait this long after each tick before producing a frame. Larger improves interpolation alignment but adds fixed latency (default: 0.0).",
+    )
     p.add_argument("--model", type=Path, default=None)
     p.add_argument("--cfg", type=Path, default=default_cfg)
     p.add_argument("--cmd-x", type=float, default=0.0, help="initial command x (forward)")
@@ -225,6 +252,43 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Log statistics snapshot every N seconds (0 disables, default: 0)",
     )
+    p.add_argument(
+        "--telemetry",
+        type=str,
+        default="off",
+        choices=["off", "live", "record"],
+        help="Telemetry mode: off|live|record (default: off)",
+    )
+    p.add_argument(
+        "--telemetry-path",
+        type=Path,
+        default=Path("log"),
+        help="Recording output path (directory or .mcap file) for telemetry=record (default: ./log)",
+    )
+    p.add_argument(
+        "--telemetry-host",
+        type=str,
+        default="0.0.0.0",
+        help="Foxglove live server bind host for telemetry=live (default: 0.0.0.0)",
+    )
+    p.add_argument(
+        "--telemetry-port",
+        type=int,
+        default=8765,
+        help="Foxglove live WebSocket port for telemetry=live (default: 8765)",
+    )
+    p.add_argument(
+        "--telemetry-live-hz",
+        type=float,
+        default=20.0,
+        help="Downsample rate for telemetry=live (Hz, default: 20)",
+    )
+    p.add_argument(
+        "--telemetry-queue",
+        type=int,
+        default=2000,
+        help="Telemetry queue size (default: 2000). When full, drops oldest messages.",
+    )
     return p.parse_args()
 
 
@@ -249,6 +313,9 @@ def main() -> None:
 
     open_kwargs = dict(
         sync_hz=sync_hz,
+        sync_phase_ms=0.0,
+        sync_clock="fixed",
+        align_delay_ms=float(args.align_delay_ms),
         enable_statistics=bool(args.enable_statistics),
         statistics_sample_every=int(args.statistics_sample_every),
         statistics_ema_shift=int(args.statistics_ema_shift),
@@ -280,6 +347,34 @@ def main() -> None:
             logger.info(f"Received first aligned frame at timestamp: {stamp_ns / 1e9:.3f} s")
             break
 
+    telemetry_mode = str(args.telemetry).strip().lower()
+    telemetry_cfg = TelemetryConfig(
+        mode=telemetry_mode,
+        record_mcap=args.telemetry_path if telemetry_mode == "record" else None,
+        foxglove_host=str(args.telemetry_host),
+        foxglove_port=int(args.telemetry_port) if telemetry_mode == "live" else None,
+        foxglove_live_hz=float(args.telemetry_live_hz),
+        queue_size=int(args.telemetry_queue),
+    )
+    telemetry_enabled = telemetry_mode != "off"
+    telemetry = None
+    frame_capture = None
+    if telemetry_enabled:
+        telemetry = Telemetry(
+            telemetry_cfg,
+            metadata={
+                "aimrt_backend": str(args.aimrt_backend),
+                "aimrt_config_path": str(args.aimrt_config_path) if args.aimrt_config_path is not None else "",
+                "cfg_path": str(args.cfg),
+                "model_path": str(app_cfg.model_path),
+                "control_hz": f"{control_hz:.6f}",
+                "sync_hz": f"{sync_hz:.6f}",
+            },
+        )
+        telemetry.start()
+        frame_capture = FrameCaptureThread(state, telemetry, timeout_s=1.0)
+        frame_capture.start()
+
     dt = 1.0 / control_hz
     log_every = max(1, int(control_hz))
     arm_target = np.array(app_cfg.arm_default_joint_angles, dtype=np.float64)
@@ -296,11 +391,24 @@ def main() -> None:
 
     try:
         loop_idx = 0
+        last_stamp_ns = 0
         last_aligned = True
         last_align_warn_t = 0.0
         while True:
             loop_idx += 1
-            stamp_ns, aligned, complete, obs = state.latest_frame()
+            try:
+                stamp_ns, aligned, complete, obs = state.wait_frame(timeout_s=1.0)
+            except Exception:
+                logger.warning("wait_frame timeout/stopped; retrying")
+                continue
+
+            dt_step = dt
+            if int(stamp_ns) > 0 and last_stamp_ns > 0:
+                dt_s = (int(stamp_ns) - int(last_stamp_ns)) / 1e9
+                if 0.0 < dt_s < 0.2:
+                    dt_step = dt_s
+            if int(stamp_ns) > 0:
+                last_stamp_ns = int(stamp_ns)
 
             if not complete:
                 now = time.monotonic()
@@ -333,7 +441,7 @@ def main() -> None:
 
             start_time = time.perf_counter()
             if fsm is not None:
-                leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt)
+                leg_pos_des, leg_stiffness, leg_damping = fsm.step(obs, policy, snap, dt_step)
                 arm_emergency = bool(fsm.emergency_stop)
             else:
                 if emergency_stop:
@@ -376,6 +484,16 @@ def main() -> None:
                     )
 
             # start_time = time.perf_counter()
+            if telemetry is not None:
+                telemetry.push_cmd(
+                    stamp_ns=int(stamp_ns),
+                    arm_position=arm_pos_des,
+                    arm_stiffness=arm_stiffness,
+                    arm_damping=arm_damping,
+                    leg_position=leg_pos_des,
+                    leg_stiffness=leg_stiffness,
+                    leg_damping=leg_damping,
+                )
             cmd.set_leg(position=leg_pos_des, stiffness=leg_stiffness, damping=leg_damping)
             cmd.set_arm(position=arm_pos_des, stiffness=arm_stiffness, damping=arm_damping)
             cmd.commit(stamp_ns=stamp_ns)
@@ -429,6 +547,11 @@ def main() -> None:
                     sync = s.get("sync", {})
                     wait_frame = s.get("wait_frame", {})
                     uptime_s = float(s.get("uptime_ns", 0)) / 1e9
+                    if stamp_ns and int(stamp_ns) > 0:
+                        frame_age_ms = (time.time_ns() - int(stamp_ns)) / 1e6
+                        frame_age_str = f"{frame_age_ms:7.3f}"
+                    else:
+                        frame_age_str = "n/a"
                     age_arm = _metric_ms(sync.get("age_arm_ns", {}))
                     age_leg = _metric_ms(sync.get("age_leg_ns", {}))
                     age_imu = _metric_ms(sync.get("age_imu_ns", {}))
@@ -447,7 +570,8 @@ def main() -> None:
                         f"                  pub_leg={pub_leg} \n"
                         f"  SYNC:\n"
                         f"    ticks         : {int(sync.get('tick_total', 0)):,}   (overrun: {int(sync.get('tick_overrun', 0)):,})\n"
-                        f"    tick age (ms) : arm={age_arm} \n"
+                        f"    frame age (ms):         {frame_age_str}   (now - latest_frame.stamp_ns)\n"
+                        f"    tick age  (ms): arm={age_arm} \n"
                         f"                    leg={age_leg} \n"
                         f"                    imu={age_imu} \n"
                         f"    frames:\n"
@@ -458,11 +582,14 @@ def main() -> None:
                         f"      unaligned   : {int(sync.get('frame_unaligned_skew', 0)):,} (skew)\n"
                         f"    wait_frame    : ok {int(wait_frame.get('ok', 0)):,} | timeout {int(wait_frame.get('timeout', 0)):,} | stopped {int(wait_frame.get('stopped', 0)):,}",
                     )
-            time.sleep(dt)
 
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt")
     finally:
+        if frame_capture is not None:
+            frame_capture.close()
+        if telemetry is not None:
+            telemetry.close()
         teleop.close()
         aimrl_sdk.close(state)
 

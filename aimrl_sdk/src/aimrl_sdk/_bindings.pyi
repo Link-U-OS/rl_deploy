@@ -29,7 +29,7 @@ class StateInterface:
         ...
 def close(handle: typing.Any = None) -> None:
     ...
-def open(config_path: typing.Any = None, sync_hz: typing.SupportsFloat = 100.0, max_skew_ms: typing.SupportsFloat = 3.0, max_backtrack: typing.SupportsInt = 200, raw_ring: typing.SupportsInt = 2048, frame_ring: typing.SupportsInt = 512, arm_names: typing.Any = None, leg_names: typing.Any = None, use_closed_ankle: bool = True, ankle_torque_control: bool = True, ankle_motor1_direction: typing.SupportsInt = 1, ankle_motor2_direction: typing.SupportsInt = 1, ankle_pitch_direction: typing.SupportsInt = 1, ankle_roll_direction: typing.SupportsInt = 1, ankle_d: typing.SupportsFloat = 0.0315, ankle_l: typing.SupportsFloat = 0.063, ankle_h1: typing.SupportsFloat = 0.239, ankle_h2: typing.SupportsFloat = 0.145, ankle_actuator_pos_limit: typing.SupportsFloat = 1.0, ankle_pitch_limit: typing.SupportsFloat = 1.0, ankle_roll_limit: typing.SupportsFloat = 0.5, enable_statistics: bool = False, statistics_sample_every: typing.SupportsInt = 1, statistics_ema_shift: typing.SupportsInt = 4) -> tuple:
+def open(config_path: typing.Any = None, sync_hz: typing.SupportsFloat = 100.0, max_skew_ms: typing.SupportsFloat = 3.0, max_backtrack: typing.SupportsInt = 200, sync_phase_ms: typing.SupportsFloat = 0.0, sync_clock: str = "fixed", align_delay_ms: typing.SupportsFloat = 0.0, raw_ring: typing.SupportsInt = 2048, frame_ring: typing.SupportsInt = 512, arm_names: typing.Any = None, leg_names: typing.Any = None, use_closed_ankle: bool = True, ankle_torque_control: bool = True, ankle_motor1_direction: typing.SupportsInt = 1, ankle_motor2_direction: typing.SupportsInt = 1, ankle_pitch_direction: typing.SupportsInt = 1, ankle_roll_direction: typing.SupportsInt = 1, ankle_d: typing.SupportsFloat = 0.0315, ankle_l: typing.SupportsFloat = 0.063, ankle_h1: typing.SupportsFloat = 0.239, ankle_h2: typing.SupportsFloat = 0.145, ankle_actuator_pos_limit: typing.SupportsFloat = 1.0, ankle_pitch_limit: typing.SupportsFloat = 1.0, ankle_roll_limit: typing.SupportsFloat = 0.5, enable_statistics: bool = False, statistics_sample_every: typing.SupportsInt = 1, statistics_ema_shift: typing.SupportsInt = 4) -> tuple:
     """
     Open the AimRL SDK and return `(state, cmd)`.
     
@@ -39,6 +39,14 @@ def open(config_path: typing.Any = None, sync_hz: typing.SupportsFloat = 100.0, 
       sync_hz: Frame synchronization frequency (Hz) for generating aligned frames.
       max_skew_ms: Max allowed timestamp skew (ms) for a frame to be marked `aligned`.
       max_backtrack: Max samples to scan backward per tick to find `<= tick` samples.
+      sync_phase_ms: Tick phase offset in milliseconds for aligning ticks to sensor
+        timestamp phases (advanced). If <0, automatically estimates the phase from
+        IMU timestamps (default: 0.0).
+      sync_clock: Tick clock source. 'fixed' uses system_clock scheduling. 'imu'
+        uses IMU timestamps as the master clock (default: fixed).
+      align_delay_ms: Additional delay before producing a frame for a given tick.
+        This adds a small bounded latency to allow interpolation using samples after
+        the tick, improving cross-sensor alignment (default: 0.0).
       raw_ring: Raw sample ring capacity (arm/leg/imu).
       frame_ring: Aligned frame ring capacity.
       arm_names: Optional list[str] of length 14 for command joint names.

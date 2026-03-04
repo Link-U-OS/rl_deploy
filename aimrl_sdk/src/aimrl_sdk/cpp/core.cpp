@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "layout.hpp"
 
@@ -23,6 +25,240 @@ static std::int64_t now_steady_ns() {
   using namespace std::chrono;
   return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
       .count();
+}
+
+static std::int64_t positive_mod(std::int64_t x, std::int64_t m) {
+  if (m <= 0)
+    return 0;
+  auto r = x % m;
+  if (r < 0)
+    r += m;
+  return r;
+}
+
+template <class Sample> struct BracketSamples {
+  bool has_before{false};
+  bool has_after{false};
+  Sample before{};
+  Sample after{};
+};
+
+template <class Ring, class Sample>
+static BracketSamples<Sample> find_bracket_(const Ring &ring, TimestampNs t,
+                                           std::uint64_t start_idx,
+                                           int max_backtrack) {
+  BracketSamples<Sample> out{};
+  auto idx = start_idx;
+  Sample tmp{};
+
+  // Scan from newest to older. Track the closest sample after tick (smallest
+  // stamp > tick) and stop at the first sample <= tick (closest from below).
+  std::int64_t best_after_stamp = std::numeric_limits<std::int64_t>::max();
+  for (int i = 0; i < max_backtrack && idx > 0; ++i, --idx) {
+    if (!ring.read_at(idx, tmp))
+      continue;
+    if (tmp.stamp.value <= 0)
+      continue;
+
+    if (tmp.stamp.value <= t.value) {
+      out.before = tmp;
+      out.has_before = true;
+      break;
+    }
+
+    if (tmp.stamp.value < best_after_stamp) {
+      best_after_stamp = tmp.stamp.value;
+      out.after = tmp;
+      out.has_after = true;
+    }
+  }
+  return out;
+}
+
+template <std::size_t N>
+static std::array<double, N> lerp_array_(const std::array<double, N> &a,
+                                        const std::array<double, N> &b,
+                                        double alpha) {
+  std::array<double, N> out{};
+  for (std::size_t i = 0; i < N; ++i) {
+    out[i] = a[i] + (b[i] - a[i]) * alpha;
+  }
+  return out;
+}
+
+static std::array<double, 4> normalize_quat_(std::array<double, 4> q) {
+  const auto n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+  if (n2 <= 0.0)
+    return {0.0, 0.0, 0.0, 1.0};
+  const auto inv = 1.0 / std::sqrt(n2);
+  for (auto &v : q)
+    v *= inv;
+  return q;
+}
+
+static std::array<double, 4> slerp_quat_(std::array<double, 4> qa,
+                                        std::array<double, 4> qb,
+                                        double alpha) {
+  qa = normalize_quat_(qa);
+  qb = normalize_quat_(qb);
+
+  double dot = qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3];
+  if (dot < 0.0) {
+    dot = -dot;
+    for (auto &v : qb)
+      v = -v;
+  }
+
+  constexpr double kDotThreshold = 0.9995;
+  if (dot > kDotThreshold) {
+    auto out = lerp_array_(qa, qb, alpha);
+    return normalize_quat_(out);
+  }
+
+  dot = std::clamp(dot, -1.0, 1.0);
+  const double theta0 = std::acos(dot);
+  const double theta = theta0 * alpha;
+  const double sin_theta0 = std::sin(theta0);
+  const double sin_theta = std::sin(theta);
+
+  const double s0 = std::cos(theta) - dot * (sin_theta / sin_theta0);
+  const double s1 = sin_theta / sin_theta0;
+
+  std::array<double, 4> out{};
+  for (int i = 0; i < 4; ++i) {
+    out[static_cast<std::size_t>(i)] = qa[static_cast<std::size_t>(i)] * s0 +
+                                       qb[static_cast<std::size_t>(i)] * s1;
+  }
+  return normalize_quat_(out);
+}
+
+template <int DOF>
+static bool resample_joint_at_tick_(
+    const RingBuffer<JointSample<DOF>> &ring, TimestampNs tick,
+    int max_backtrack, JointSample<DOF> &out) {
+  const auto br =
+      find_bracket_<RingBuffer<JointSample<DOF>>, JointSample<DOF>>(
+          ring, tick, ring.latest_index(), max_backtrack);
+  if (!br.has_before)
+    return false;
+
+  if (br.has_after && br.after.stamp.value > br.before.stamp.value &&
+      br.before.stamp.value <= tick.value &&
+      tick.value <= br.after.stamp.value) {
+    const auto denom =
+        static_cast<double>(br.after.stamp.value - br.before.stamp.value);
+    const auto num = static_cast<double>(tick.value - br.before.stamp.value);
+    const auto alpha =
+        std::clamp(denom > 0.0 ? (num / denom) : 0.0, 0.0, 1.0);
+
+    out = br.before;
+    out.stamp = tick;
+    out.pos = lerp_array_(br.before.pos, br.after.pos, alpha);
+    out.vel = lerp_array_(br.before.vel, br.after.vel, alpha);
+    out.eff = lerp_array_(br.before.eff, br.after.eff, alpha);
+    return true;
+  }
+
+  out = br.before;
+  return true;
+}
+
+static bool resample_imu_at_tick_(const RingBuffer<ImuSample> &ring,
+                                 TimestampNs tick, int max_backtrack,
+                                 ImuSample &out) {
+  const auto br = find_bracket_<RingBuffer<ImuSample>, ImuSample>(
+      ring, tick, ring.latest_index(), max_backtrack);
+  if (!br.has_before)
+    return false;
+
+  if (br.has_after && br.after.stamp.value > br.before.stamp.value &&
+      br.before.stamp.value <= tick.value &&
+      tick.value <= br.after.stamp.value) {
+    const auto denom =
+        static_cast<double>(br.after.stamp.value - br.before.stamp.value);
+    const auto num = static_cast<double>(tick.value - br.before.stamp.value);
+    const auto alpha =
+        std::clamp(denom > 0.0 ? (num / denom) : 0.0, 0.0, 1.0);
+
+    out = br.before;
+    out.stamp = tick;
+    out.quat_xyzw = slerp_quat_(br.before.quat_xyzw, br.after.quat_xyzw, alpha);
+    out.gyro = lerp_array_(br.before.gyro, br.after.gyro, alpha);
+    out.acc = lerp_array_(br.before.acc, br.after.acc, alpha);
+    return true;
+  }
+
+  out = br.before;
+  return true;
+}
+
+static std::int64_t estimate_phase_from_imu(
+    const RingBuffer<ImuSample> &ring, std::int64_t period_ns,
+    const std::stop_token &stoken, const std::function<bool()> &running) {
+  if (period_ns <= 0)
+    return 0;
+
+  constexpr int kTargetSamples = 50;
+  constexpr std::int64_t kMaxWaitNs = 500'000'000;  // 0.5s
+  constexpr std::int64_t kBinNs = 100'000;          // 0.1ms bins
+
+  std::vector<std::int64_t> phases;
+  phases.reserve(kTargetSamples);
+
+  std::int64_t last_stamp = 0;
+  const auto t0 = now_system_ns().value;
+
+  while (!stoken.stop_requested() && running() &&
+         static_cast<int>(phases.size()) < kTargetSamples) {
+    if ((now_system_ns().value - t0) > kMaxWaitNs)
+      break;
+
+    const auto idx = ring.latest_index();
+    if (idx > 0) {
+      ImuSample imu{};
+      if (ring.read_at(idx, imu) && imu.stamp.value > 0 &&
+          imu.stamp.value != last_stamp) {
+        last_stamp = imu.stamp.value;
+        phases.push_back(positive_mod(imu.stamp.value, period_ns));
+      }
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  if (phases.empty())
+    return 0;
+
+  const auto bins = static_cast<int>((period_ns + kBinNs - 1) / kBinNs);
+  std::vector<int> hist(static_cast<std::size_t>(std::max(1, bins)), 0);
+  for (const auto p : phases) {
+    const auto b = static_cast<int>(std::clamp<std::int64_t>(p / kBinNs, 0, bins - 1));
+    hist[static_cast<std::size_t>(b)] += 1;
+  }
+
+  int best_bin = 0;
+  int best_count = hist[0];
+  for (int b = 1; b < bins; ++b) {
+    if (hist[static_cast<std::size_t>(b)] > best_count) {
+      best_count = hist[static_cast<std::size_t>(b)];
+      best_bin = b;
+    }
+  }
+
+  const auto lo = static_cast<std::int64_t>(best_bin) * kBinNs;
+  const auto hi = std::min(period_ns, lo + kBinNs);
+  std::vector<std::int64_t> in_bin;
+  in_bin.reserve(phases.size());
+  for (const auto p : phases) {
+    if (p >= lo && p < hi)
+      in_bin.push_back(p);
+  }
+  if (in_bin.empty())
+    return std::clamp<std::int64_t>(lo + kBinNs / 2, 0, period_ns - 1);
+
+  std::nth_element(in_bin.begin(), in_bin.begin() + in_bin.size() / 2, in_bin.end());
+  const auto med = in_bin[in_bin.size() / 2];
+  return std::clamp<std::int64_t>(med, 0, period_ns - 1);
 }
 
 Core::Core(Options opt, std::unique_ptr<Transport> transport)
@@ -146,6 +382,8 @@ void Core::on_imu(const std::shared_ptr<const sensor_msgs::msg::Imu> &msg) {
   imu.acc[1] = msg->linear_acceleration.y;
   imu.acc[2] = msg->linear_acceleration.z;
   imu_raw_.write([&](auto &dst) { dst = imu; });
+  imu_seq_.fetch_add(1, std::memory_order_relaxed);
+  imu_cv_.notify_all();
   if (stats_enabled) {
     stats_.on_imu(recv_time_ns.value, imu_stamp);
   }
@@ -348,34 +586,160 @@ void apply_closed_ankle_state_(JointSample<kLegDof> &leg,
 void Core::sync_loop_(const std::stop_token &stoken) {
   const auto period_ns = static_cast<std::int64_t>(1e9 / opt_.sync.frame_hz);
 
-  auto next = now_system_ns();
-  next.value = (next.value / period_ns + 1) * period_ns;
+  auto phase_ns = opt_.sync.phase_ns;
+  auto align_delay_ns = opt_.sync.align_delay_ns;
+  if (period_ns <= 0)
+    return;
+  if (phase_ns < 0)
+    phase_ns = 0;
+  if (phase_ns >= period_ns)
+    phase_ns = phase_ns % period_ns;
+  if (align_delay_ns < 0)
+    align_delay_ns = 0;
 
   std::array<float, kFrameDim> last_x{};
 
   while (!stoken.stop_requested() && running()) {
-    const auto tp = std::chrono::system_clock::time_point(
-        std::chrono::nanoseconds(next.value));
-    std::this_thread::sleep_until(tp);
-    const auto tick = TimestampNs{next.value};
-    next.value += period_ns;
+    TimestampNs tick{};
+    std::int64_t release_ns = 0;
+
+    if (opt_.sync.clock_source == SyncClockSource::Imu) {
+      // IMU-driven: schedule ticks at k*period + phase where phase is derived
+      // from the IMU stamp stream (with optional additional phase_ns offset).
+      static thread_local bool imu_init = false;
+      static thread_local std::int64_t next_tick_ns = 0;
+      static thread_local std::int64_t grid_phase_ns = 0;
+      static thread_local std::uint64_t last_imu_seq = 0;
+
+      if (!imu_init) {
+        // Wait for first IMU sample with a valid timestamp.
+        while (!stoken.stop_requested() && running()) {
+          std::unique_lock lk(imu_mtx_);
+          imu_cv_.wait_for(lk, std::chrono::milliseconds(100), [&] {
+            return imu_seq_.load(std::memory_order_relaxed) != last_imu_seq || !running() ||
+                   stoken.stop_requested();
+          });
+          if (!running() || stoken.stop_requested())
+            return;
+          last_imu_seq = imu_seq_.load(std::memory_order_relaxed);
+          lk.unlock();
+
+          const auto idx = imu_raw_.latest_index();
+          ImuSample imu{};
+          if (idx > 0 && imu_raw_.read_at(idx, imu) && imu.stamp.value > 0) {
+            grid_phase_ns = positive_mod(imu.stamp.value + phase_ns, period_ns);
+            const auto base =
+                imu.stamp.value - positive_mod(imu.stamp.value, period_ns);
+            // Next tick strictly after the first observed IMU stamp.
+            next_tick_ns = base + grid_phase_ns;
+            if (next_tick_ns <= imu.stamp.value) {
+              next_tick_ns += period_ns;
+            }
+            imu_init = true;
+            break;
+          }
+        }
+      }
+
+      // Wait for IMU to advance past the next tick.
+      while (!stoken.stop_requested() && running()) {
+        std::unique_lock lk(imu_mtx_);
+        imu_cv_.wait_for(lk, std::chrono::milliseconds(100), [&] {
+          return imu_seq_.load(std::memory_order_relaxed) != last_imu_seq || !running() ||
+                 stoken.stop_requested();
+        });
+        if (!running() || stoken.stop_requested())
+          return;
+        last_imu_seq = imu_seq_.load(std::memory_order_relaxed);
+        lk.unlock();
+
+        const auto idx = imu_raw_.latest_index();
+        ImuSample imu{};
+        if (!(idx > 0 && imu_raw_.read_at(idx, imu) && imu.stamp.value > 0))
+          continue;
+
+        // If we're behind by more than one tick (e.g. IMU gap), fast-forward to
+        // the most recent tick on the IMU-aligned grid (drop intermediate ticks
+        // to avoid growing end-to-end latency / frame_age).
+        if (imu.stamp.value >= (next_tick_ns + period_ns)) {
+          const auto newest_tick_ns =
+              imu.stamp.value -
+              positive_mod(imu.stamp.value - grid_phase_ns, period_ns);
+          next_tick_ns = std::max(next_tick_ns, newest_tick_ns);
+        }
+
+        if (imu.stamp.value >= next_tick_ns) {
+          tick = TimestampNs{next_tick_ns};
+          next_tick_ns += period_ns;
+          break;
+        }
+      }
+    } else {
+      // Fixed clock: system_clock tick cadence, with optional auto phase from IMU.
+      static thread_local bool fixed_init = false;
+      static thread_local std::int64_t next_tick_ns = 0;
+      if (!fixed_init) {
+        if (opt_.sync.phase_ns < 0) {
+          // Auto-align tick phase to IMU timestamp phase to reduce systematic IMU age.
+          phase_ns = estimate_phase_from_imu(
+              imu_raw_, period_ns, stoken, [this] { return this->running(); });
+          if (phase_ns < 0)
+            phase_ns = 0;
+          if (phase_ns >= period_ns)
+            phase_ns = phase_ns % period_ns;
+        }
+
+        auto next = now_system_ns();
+        next.value = (next.value / period_ns + 1) * period_ns + phase_ns;
+        if (next.value <= now_system_ns().value) {
+          next.value += period_ns;
+        }
+        next_tick_ns = next.value;
+        fixed_init = true;
+      }
+
+      tick = TimestampNs{next_tick_ns};
+      next_tick_ns += period_ns;
+
+      // If the loop overruns, fast-forward to the newest tick on the fixed grid
+      // (dropping intermediate ticks) to avoid accumulating end-to-end latency.
+      const auto now0 = now_system_ns().value;
+      const auto align_ref = (now0 > align_delay_ns) ? (now0 - align_delay_ns) : 0;
+      const auto newest_base = (align_ref / period_ns) * period_ns;
+      const auto newest_tick = newest_base + phase_ns;
+      if (newest_tick > tick.value) {
+        tick.value = newest_tick;
+        next_tick_ns = tick.value + period_ns;
+      }
+    }
+
+    // Wait until tick + align_delay_ns so we can interpolate using samples after
+    // the tick. This reduces systematic cross-sensor skew at the cost of a
+    // small bounded latency.
+    release_ns = tick.value + align_delay_ns;
+    const auto now_ns = now_system_ns().value;
+    if (release_ns > now_ns) {
+      const auto tp = std::chrono::system_clock::time_point(
+          std::chrono::nanoseconds(release_ns));
+      std::this_thread::sleep_until(tp);
+    }
 
     const auto stats_enabled = stats_.enabled();
     const auto wake_lateness_ns =
-        stats_enabled ? (now_system_ns().value - tick.value) : 0;
+        stats_enabled ? (now_system_ns().value - release_ns) : 0;
     const auto compute_t0 = stats_enabled ? now_steady_ns() : 0;
 
-    // fetch samples <= tick
+    // Fetch (and interpolate) samples at tick.
     JointSample<kArmDof> arm{};
     JointSample<kLegDof> leg{};
     ImuSample imu{};
 
-    const auto arm_ok = find_leq_(arm_raw_, tick, arm_raw_.latest_index(),
-                                  opt_.sync.max_backtrack, arm);
-    const auto leg_ok = find_leq_(leg_raw_, tick, leg_raw_.latest_index(),
-                                  opt_.sync.max_backtrack, leg);
-    const auto imu_ok = find_leq_(imu_raw_, tick, imu_raw_.latest_index(),
-                                  opt_.sync.max_backtrack, imu);
+    const auto arm_ok =
+        resample_joint_at_tick_(arm_raw_, tick, opt_.sync.max_backtrack, arm);
+    const auto leg_ok =
+        resample_joint_at_tick_(leg_raw_, tick, opt_.sync.max_backtrack, leg);
+    const auto imu_ok =
+        resample_imu_at_tick_(imu_raw_, tick, opt_.sync.max_backtrack, imu);
 
     if (stats_enabled) {
       stats_.on_sync_missing(arm_ok, leg_ok, imu_ok);

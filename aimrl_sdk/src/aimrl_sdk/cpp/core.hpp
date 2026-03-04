@@ -146,6 +146,11 @@ class Core final {
   mutable std::mutex frame_mtx_;
   mutable std::condition_variable frame_cv_;
 
+  // IMU-driven tick support
+  mutable std::mutex imu_mtx_;
+  mutable std::condition_variable imu_cv_;
+  std::atomic<std::uint64_t> imu_seq_{0};
+
   // pending commands + publish atomicity
   std::mutex cmd_mtx_;
   PendingCommand<kArmDof> arm_pending_{};
